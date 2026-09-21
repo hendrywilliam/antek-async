@@ -1,6 +1,12 @@
 // Route metadata drives the sidebar and the header. Every menu is its own hash route; which
 // cluster kind a page streams is the page's own business, so it is not listed here.
-export type View = "node" | "pod" | "deployment" | "statefulset" | "settings";
+export type View =
+	| "node"
+	| "pod"
+	| "deployment"
+	| "statefulset"
+	| "editor"
+	| "settings";
 
 export type RouteDef = {
 	view: View;
@@ -33,6 +39,12 @@ export const ROUTES: Record<View, RouteDef> = {
 		path: "/nodes",
 		label: "Nodes",
 		subtitle: "Cluster-wide",
+	},
+	editor: {
+		view: "editor",
+		path: "/editor",
+		label: "Editor",
+		subtitle: "Apply YAML to the cluster",
 	},
 	settings: {
 		view: "settings",

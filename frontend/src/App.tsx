@@ -21,6 +21,7 @@ import {
 	RotateCw,
 	Server,
 	Settings,
+	SquarePen,
 } from "lucide-react";
 import {
 	GetState,
@@ -48,6 +49,7 @@ import {
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { DeploymentsPage } from "@/pages/deployments";
+import { EditorPage } from "@/pages/editor";
 import { NodesPage } from "@/pages/nodes";
 import { PodsPage } from "@/pages/pods";
 import { SettingsPage } from "@/pages/settings";
@@ -56,10 +58,12 @@ import { DEFAULT_PATH, ROUTES, routeForPath, type View } from "@/routes";
 
 const STATE_UPDATE_EVENT = "state:update";
 
-// Nodes are cluster scoped and get their own group above the namespaced workloads.
+// Nodes are cluster scoped and get their own group above the namespaced workloads. The editor
+// writes rather than lists, so it sits in its own group below them.
 const MENU_GROUPS: { label: string; views: View[] }[] = [
 	{ label: "Cluster", views: ["node"] },
 	{ label: "Workloads", views: ["pod", "deployment", "statefulset"] },
+	{ label: "Manifest", views: ["editor"] },
 ];
 
 // Icons are presentation only, so they stay out of the route metadata.
@@ -68,6 +72,7 @@ const VIEW_ICONS: Record<View, ComponentType<{ className?: string }>> = {
 	pod: Box,
 	deployment: Layers,
 	statefulset: Database,
+	editor: SquarePen,
 	settings: Settings,
 };
 
@@ -159,10 +164,7 @@ function AppShell() {
 														isActive={route?.view === view}
 														tooltip={item.label}
 													>
-														<Link
-															onClick={reloadIfOpen(view)}
-															to={item.path}
-														>
+														<Link onClick={reloadIfOpen(view)} to={item.path}>
 															<Icon />
 															<span>{item.label}</span>
 														</Link>
@@ -253,6 +255,7 @@ function AppShell() {
 							path={ROUTES.statefulset.path}
 						/>
 						<Route element={<NodesPage />} path={ROUTES.node.path} />
+						<Route element={<EditorPage />} path={ROUTES.editor.path} />
 						<Route element={<SettingsPage />} path={ROUTES.settings.path} />
 						<Route element={<Navigate replace to={DEFAULT_PATH} />} path="*" />
 					</Routes>

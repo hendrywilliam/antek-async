@@ -1,5 +1,23 @@
 export namespace kube {
 	
+	export class ApplyResult {
+	    apiVersion: string;
+	    kind: string;
+	    namespace: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ApplyResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.apiVersion = source["apiVersion"];
+	        this.kind = source["kind"];
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	    }
+	}
 	export class Candidate {
 	    source: string;
 	    path: string;

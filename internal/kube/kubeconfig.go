@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -151,9 +152,9 @@ func DefaultConfigDir() string {
 	return ""
 }
 
-// ClientFor builds a Kubernetes clientset for a single kubeconfig file. One client is shared
-// by whichever resource watcher is active.
-func ClientFor(path string) (kubernetes.Interface, error) {
+// RestConfigFor builds a rest.Config for a single kubeconfig file. The typed, dynamic and
+// discovery clients are all built from it, so the loading rules live in one place.
+func RestConfigFor(path string) (*rest.Config, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	// ExplicitPath makes Load() read this file only and fail loudly when missing.
 	rules.ExplicitPath = path
@@ -164,6 +165,17 @@ func ClientFor(path string) (kubernetes.Interface, error) {
 	restConfig, err := clientConfig.ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("cannot load kubeconfig %s: %w", path, err)
+	}
+
+	return restConfig, nil
+}
+
+// ClientFor builds a Kubernetes clientset for a single kubeconfig file. One client is shared
+// by whichever resource watcher is active.
+func ClientFor(path string) (kubernetes.Interface, error) {
+	restConfig, err := RestConfigFor(path)
+	if err != nil {
+		return nil, err
 	}
 
 	return kubernetes.NewForConfig(restConfig)

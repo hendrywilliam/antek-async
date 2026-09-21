@@ -213,6 +213,24 @@ func (a *App) GetPodYAML(namespace, name string) (string, error) {
 	return kube.PodYAML(a.ctx, clientset, namespace, name)
 }
 
+// ApplyYAML sends one manifest to the active cluster with server-side apply, so the editor can
+// create or update any kind the cluster knows. It reads the current kubeconfig per call, so
+// switching clusters changes where the document lands. The error is returned to the caller
+// rather than stored in AppState, because it belongs to the editor page and not to the shell.
+func (a *App) ApplyYAML(document string) (kube.ApplyResult, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	if path == "" {
+		return kube.ApplyResult{}, errors.New("Kubeconfig not found")
+	}
+
+	// force stays off: a field owned by another manager should surface as a conflict the user
+	// can read, not be stolen silently.
+	return kube.ApplyYAML(a.ctx, path, document, false)
+}
+
 // startWatch cancels every other watcher and streams the requested resource, so only the menu
 // that is open ever talks to the cluster.
 func (a *App) startWatch(resource kube.Resource) {

@@ -4,11 +4,12 @@
 
 `antek-async` is a Wails v2 desktop app that shows Kubernetes Nodes, Pods, Deployments and
 StatefulSets. Pods and the workload controllers span **all namespaces**; nodes are cluster
-scoped. It is deliberately small: read-only, no resource detail, no logs, no write operations,
-no multi-cluster switching, and every list is filtered and grouped on the client. Each menu is
-fetched from the cluster **only when it is opened**, so nothing is listed or watched in the
-background. The one extra fetch is on demand: the pod table's actions dropdown can open a
-read-only YAML view of that pod in a CodeMirror drawer.
+scoped. It is deliberately small: no resource detail, no logs, no multi-cluster switching, and
+every list is filtered and grouped on the client. Each menu is fetched from the cluster **only
+when it is opened**, so nothing is listed or watched in the background. Two things step outside
+those lists: the pod table's actions dropdown opens a read-only YAML view of that pod in a
+CodeMirror drawer, and the **Editor** menu writes, sending one hand-written manifest to the
+cluster with server-side apply.
 
 ## Stack / Toolchain
 
@@ -60,13 +61,16 @@ internal/kube  (no Wails imports, unit-testable)
 kubeconfig.go  Resolve()        manual > $KUBECONFIG > ~/.kube/config
                                 > <cwd>/.kube/config, one file, no merging
                Status/Candidate what the UI shows about the active cluster
-               ClientFor()      clientcmd -> kubernetes.Interface
+               RestConfigFor()  clientcmd -> rest.Config
+               ClientFor()      rest.Config -> kubernetes.Interface
 nodes.go       NodeInfo         cluster scoped, no namespace
                                 kubectl STATUS / ROLES / VERSION columns
 pods.go        PodInfo / podStatus / WatchPods
                                 flattened rows + port of kubectl's STATUS logic
 deployments.go DeploymentInfo / WatchDeployments
 statefulsets.go StatefulSetInfo / WatchStatefulSets
+apply.go       ApplyResult / ApplyYAML
+                                server-side apply for any discovered kind
 watch.go       Resource         the four watched kinds, plumbing only:
                                 watchInformer[T], sort helpers, replicaCount
 
@@ -81,12 +85,14 @@ frontend/src/routes.ts        route path/label/subtitle per menu; no cluster kin
 frontend/src/app-context.tsx  AppContext: AppState plus busy/error/run/reload
 frontend/src/use-resource.ts  per-page hook that starts the kind the page streams
 frontend/src/pages            one page per menu: pods, deployments, statefulsets,
-                              nodes, settings
+                              nodes, editor, settings
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
 frontend/src/components/
   resource-table.tsx          generic table with filter/Group By on the client
   status-label.tsx            StatusLabel/NodeStatusLabel, the only colour in the UI
+  yaml-style.ts               shared monochrome CodeMirror theme and highlight
   yaml-viewer.tsx             read-only CodeMirror YAML viewer
+  yaml-editor.tsx             editable CodeMirror YAML editor
   pod-yaml-drawer.tsx         drawer that fetches one pod via GetPodYAML
   ui/                         shadcn components (table, sidebar, button, ...)
 ```
@@ -102,10 +108,14 @@ frontend/src/components/
 - **Nodes are cluster scoped**, which shows up in three places: the probe and informer take no
   namespace, `sortByName` replaces the namespace-then-name sort, and `NODE_ACCESSORS` in
   `src/pages/nodes.tsx` omits `namespace` so the table hides the namespace filter and grouping.
-- `PodYAML` renders one pod as YAML for the drawer. It is the only request that is not part of a
-  watch, so `GetPodYAML` builds a short-lived client instead of reusing the active one, and it
-  sets `apiVersion`/`kind` by hand (the typed client leaves them empty) and clears
-  `managedFields` the way kubectl does by default.
+- `PodYAML` renders one pod as YAML for the drawer. Like `ApplyYAML`, it is not part of a watch,
+  so `GetPodYAML` builds a short-lived client instead of reusing the active one, and it sets
+  `apiVersion`/`kind` by hand (the typed client leaves them empty) and clears `managedFields`
+  the way kubectl does by default.
+- `ApplyYAML` in `apply.go` is the only write path. It decodes one YAML or JSON document into an
+  `unstructured.Unstructured`, resolves the kind through discovery and `restmapper` so any kind
+  the cluster knows works, and sends it as a server-side apply `PATCH`. `Force` stays off, so a
+  field another manager owns surfaces as a conflict instead of being taken over.
 - `Resolve` reads the environment and cwd, then delegates to `resolveKubeconfig`, which takes
   all four inputs as arguments. That split is what makes the precedence testable.
 - `Resolve` picks exactly **one** kubeconfig file (no merging), so a project config never
@@ -125,11 +135,11 @@ frontend/src/components/
 
 ### Backend to frontend contract
 
-Four bound methods, all returning the same `AppState`: `GetState`, `SelectResource`,
-`PickKubeconfig`, `ResetKubeconfig`. `AppState` carries the config plus one state object per
-resource (`nodes`, `pods`, `deployments`, `statefulSets`), each holding `items`, `loaded`,
-`loading`, `error` and `updatedAt`, so the frontend renders loading and failure per menu
-without guessing. Every change is also pushed on the `state:update` event with an identical
+`GetState`, `SelectResource`, `PickKubeconfig` and `ResetKubeconfig` all return the same
+`AppState`; `GetPodYAML` and `ApplyYAML` are the two on-demand requests outside the watch and
+return their own types. `AppState` carries the config plus one state object per resource
+(`nodes`, `pods`, `deployments`, `statefulSets`), each holding `items`, `loaded`, `loading`,
+`error` and `updatedAt`, so the frontend renders loading and failure per menu without guessing. Every change is also pushed on the `state:update` event with an identical
 payload, so the frontend has one reducer and never merges racing updates. The frontend calls
 `GetState` on mount because events emitted before it subscribed are lost.
 
@@ -242,12 +252,35 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   nothing. The close button in the top right therefore calls the drawer's `onClose` prop, which
   the pod page wires to `setYamlTarget(null)` so it flips the `open` prop itself. Never remove that
   button: between the disabled gestures and the swallowed close path, it is the only way out.
+- **The Editor menu is the only write path, and it is deliberately hard to misuse.** `ApplyYAML`
+  sends exactly one document with server-side apply and `Force` off, so a field owned by another
+  manager surfaces as a conflict instead of being taken over. It refuses a manifest without
+  `apiVersion`, `kind` or `metadata.name`, and it refuses more than one document rather than
+  silently applying the first. A namespaced manifest without `metadata.namespace` lands in
+  `default`, matching kubectl (`placement`), while a cluster-scoped kind has its namespace
+  stripped. There is no delete, no scale and no dry-run. The page reports its own outcome: the
+  error goes inline in `text-red-400`, the same colour the YAML drawer uses, and a success is
+  plain text, so the shared error banner stays reserved for configuration problems.
+- **The editor must not be rebuilt on every keystroke.** `YamlEditor`
+  (`components/yaml-editor.tsx`) creates its `EditorView` once per seed document and reports
+  changes through `EditorView.updateListener`; handing the live value back as `initialDocument`
+  would reset the cursor and the undo history, so clearing the page remounts the editor by
+  bumping `key={seed}` instead. `components/yaml-style.ts` holds the monochrome theme and
+  highlight style that the editor and the viewer share, so the two never drift apart. Only the
+  viewer disables editing, because CodeMirror's `basicSetup` is editable by default; the editor
+  therefore needed no new npm packages.
+- **The Editor streams no kube kind but still has a backend method.** Like Settings it uses
+  `useApp` rather than `useResource`, so the header offers no Reload there, but it is the one
+  non-listing page that talks to the cluster: `ApplyYAML` reads `App.config.Path` per call, so a
+  kubeconfig switch changes where the next manifest lands. Applying does not refresh the cached
+  lists, because re-opening a menu reconnects its watch anyway.
 - **The kubeconfig details live in the Settings page**, reachable from the sidebar footer and at
   the `/settings` route. The
   Settings page also lists, per resource kind, whether it has been loaded yet, how many items
   it holds and when it was refreshed. Resource pages show no connection chrome: a list that has
   not loaded yet shows the spinner, and a failed load shows the error with its own retry.
-  Settings maps to no kube kind and has no backend method behind it.
+  Settings maps to no kube kind and has no backend method behind it, while the Editor streams
+  nothing and only calls `ApplyYAML`.
 - **The shadcn registry installs `cn` as an npm package**, imported as `import { cn } from
   "cn"`. There is no `src/lib/utils.ts` even though the `aliases.utils` key exists in
   `components.json`; do not create one expecting components to use it.
@@ -302,6 +335,11 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
 - `kubeconfig_test.go` covers the resolution precedence, including that a higher priority
   source wins, that a vanished manual pick falls back to discovery, and that lower priority
   files are not chosen.
+- `apply_test.go` covers manifest decoding (a missing `apiVersion`/`kind`/`metadata.name`, JSON
+  input, several documents, a trailing separator, a non-mapping document), the namespace
+  defaulting and cluster-scoped stripping in `placement`, and kind resolution through a fake
+  discovery client, including an unknown kind. The server-side apply itself is not exercised:
+  the fake dynamic client does not reproduce its semantics.
 - `pods_test.go` covers the kubectl-equivalent status computation (init containers, waiting
   and terminated reasons, completed pods that are still running, deletion states), the
   Ready/Restarts/Age/Node flattening, and snapshot sorting.

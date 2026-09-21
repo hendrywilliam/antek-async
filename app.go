@@ -101,8 +101,9 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	// Pods are the view the frontend opens first, so activating them here saves a round trip
-	// and puts the first load on the same code path as every later switch.
+	// Pods are the view the frontend opens first, so starting that watch here means the list is
+	// usually ready by the time the webview paints. The pods page then asks for the same kind
+	// like every other page, which reconnects this watcher onto a fresh list.
 	a.mu.Lock()
 	a.config = kube.Resolve(a.manualPath)
 	a.active = kube.ResourcePods

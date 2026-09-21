@@ -19,6 +19,7 @@ read-only YAML view of that pod in a CodeMirror drawer.
 | client-go | v0.35.4 | Pinned deliberately, see the gotcha below |
 | Node | v22 via nvm | Frontend deps live in `frontend/` |
 | React | 19 | Function components only |
+| React Router | v7 (`react-router-dom`) | `HashRouter`, so every menu has its own hash route and the desktop build needs no server rewrites |
 | Vite | 7 | Config at `frontend/vite.config.ts` |
 | Tailwind | v4 via `@tailwindcss/vite` | No `tailwind.config.js`; the entry is `frontend/src/style.css` |
 | shadcn/ui | CLI 4.x, `new-york` style | Config in `frontend/components.json`, components in `src/components/ui` |
@@ -74,11 +75,20 @@ main  (Wails adapter)
 app.go   AppState + App      bound methods, per-resource state, watch lifecycle
          resourceHolder[T]  one per kind; only the open menu is streamed
 main.go  wails.Run, Bind, OnStartup/OnShutdown
-frontend/src/App.tsx          sidebar groups: Cluster > Nodes, Workloads > Pods,
-                              Deployments, StatefulSets; Settings in the footer
-                              one generic ResourceTable per kind, filter/Group By on the client
+frontend/src/App.tsx          HashRouter shell: sidebar links, header, error banner
+                              and Routes
+frontend/src/routes.ts        route path/label/subtitle per menu; no cluster kind
+frontend/src/app-context.tsx  AppContext: AppState plus busy/error/run/reload
+frontend/src/use-resource.ts  per-page hook that starts the kind the page streams
+frontend/src/pages            one page per menu: pods, deployments, statefulsets,
+                              nodes, settings
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
-frontend/src/components/ui    shadcn components (table, sidebar, button, ...)
+frontend/src/components/
+  resource-table.tsx          generic table with filter/Group By on the client
+  status-label.tsx            StatusLabel/NodeStatusLabel, the only colour in the UI
+  yaml-viewer.tsx             read-only CodeMirror YAML viewer
+  pod-yaml-drawer.tsx         drawer that fetches one pod via GetPodYAML
+  ui/                         shadcn components (table, sidebar, button, ...)
 ```
 
 ### Backend
@@ -91,7 +101,7 @@ frontend/src/components/ui    shadcn components (table, sidebar, button, ...)
   (`watch.go`), which is the only generic code in the package.
 - **Nodes are cluster scoped**, which shows up in three places: the probe and informer take no
   namespace, `sortByName` replaces the namespace-then-name sort, and `NODE_ACCESSORS` in
-  `App.tsx` omits `namespace` so the table hides the namespace filter and grouping.
+  `src/pages/nodes.tsx` omits `namespace` so the table hides the namespace filter and grouping.
 - `PodYAML` renders one pod as YAML for the drawer. It is the only request that is not part of a
   watch, so `GetPodYAML` builds a short-lived client instead of reusing the active one, and it
   sets `apiVersion`/`kind` by hand (the typed client leaves them empty) and clears
@@ -164,7 +174,8 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   `src/style.css` is the active theme (pure black page, white text, lift comes from borders and
   greys); the light `:root` set is an unused fallback that exists because shadcn expects it.
   `main.go`'s window `BackgroundColour` must match the theme, since it shows before the webview
-  paints. `StatusLabel` in `App.tsx` is the only place allowed to use colour, taken from
+  paints. `StatusLabel` in `components/status-label.tsx` is the only place allowed to use colour,
+  taken from
   Tailwind's default palette: `text-emerald-400` healthy, `text-amber-400` still starting,
   `text-red-400` for failures. Status is plain coloured **text**, not a badge, so do not
   reintroduce background or border chips. Do not add colour tokens to `style.css` for this.
@@ -182,25 +193,38 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
 - **Changing kubeconfig drops every cached list.** `resetResourcesLocked` exists for this: the
   cached rows belong to the previous cluster, and showing them against a new kubeconfig would
   look like the new cluster's data.
-- **The frontend calls `SelectResource` from click handlers, not from an effect keyed on the
-  view.** React StrictMode invokes mount effects twice in dev, which would start the same watch
-  twice. Go's `startup` activates pods so the first load needs no call from the frontend at all.
+- **Each menu is its own hash route, and the page owns the kind it streams.** `src/routes.ts`
+  holds only navigation metadata (path, label, subtitle), `App.tsx` wraps the shell in
+  `HashRouter` and drives the sidebar through `react-router-dom` links, and every page under
+  `src/pages` is a separate component. `HashRouter` rather than `BrowserRouter` is deliberate:
+  the desktop build serves the frontend with no server that could answer a path-based route.
+- **A page starts its own watch through `useResource` (`src/use-resource.ts`), so `App.tsx`
+  never names a resource.** The hook calls `SelectResource` when the page mounts and keeps the
+  ref guard that stops StrictMode's double mount from cancelling and restarting the same watch.
+  It also lends the shell its reconnect function, so the header's Reload button stays generic
+  and re-clicking the open menu in the sidebar reloads through the same path. Pages read the
+  shared `AppState` from `AppContext`; Settings streams nothing and uses `useApp` directly.
+  Go's `startup` still warms the pods watch, so the first route usually renders rows before the
+  webview paints, at the cost of one extra list when the pods page reconnects it.
 - **The payload deliberately avoids generics.** `PodsState`, `DeploymentsState` and
   `StatefulSetsState` are three concrete structs with the same shape because the Wails binding
   generator cannot name a generic instantiation. The generic `resourceHolder[T]` and
   `publishResource[T]`/`failResource[T]` helpers live on the Go side only, and `publishResource`
   is a free function because Go methods cannot take type parameters.
 - **Every table's filter and Group By are client side.** The shared `ResourceTable` in
-  `App.tsx` filters and buckets the in-memory rows and never asks the backend, so changing
-  a filter cannot trigger cluster requests. Each view mounts its own `ResourceTable`, so
-  switching sidebar entries starts from an unfiltered table, and a kind whose accessors omit
+  `components/resource-table.tsx` filters and buckets the in-memory rows and never asks the
+  backend, so changing a filter cannot trigger cluster requests. Each page mounts its own
+  `ResourceTable`, so switching sidebar entries starts from an unfiltered table, and a kind whose
+  accessors omit
   `namespace` (nodes) renders no namespace filter or namespace grouping at all. Grouping renders
   an extra `TableRow` whose `colSpan` follows the column count plus the optional actions cell.
-- **The pod YAML drawer lives outside the watch.** It fetches by namespace/name through
-  `GetPodYAML`, so it works from any menu, and the row actions arrive through `ResourceTable`'s
-  optional `rowActions` prop, which also widens the group header `colSpan`.
+- **The pod YAML drawer lives outside the watch.** `PodYamlDrawer
+  (frontend/src/components/pod-yaml-drawer.tsx)` takes a `target` and an `onClose` callback and
+  fetches by namespace/name through `GetPodYAML` itself, so it could be swapped for another
+  kind's YAML; today only the pod page mounts it. The row actions arrive through
+  `ResourceTable`'s optional `rowActions` prop, which also widens the group header `colSpan`.
 - **CodeMirror's `basicSetup` registers its default highlight style as a fallback**, which is why
-  the monochrome `yamlHighlightStyle` in `App.tsx` wins without fighting it. Keep the editor
+  the monochrome `yamlHighlightStyle` in `yaml-viewer.tsx` wins without fighting it. Keep the editor
   colourless: the theme sets `{dark: true}` and uses the app's CSS variables. Note that the
   `codemirror` meta package does not re-export `EditorState`, and the read-only viewer needs only
   `EditorView.editable.of(false)`.
@@ -215,15 +239,15 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   controlled state directly.** `dismissible={false}` makes vaul ignore overlay clicks, dragging
   and Escape, but it also makes vaul swallow its own close path: the `onOpenChange` handler it
   installs returns early when `open` is false, so a `DrawerClose` button would render and do
-  nothing. The close button in the top right therefore calls `setYamlTarget(null)`, which flips
-  the `open` prop itself. Never remove that button: between the disabled gestures and the
-  swallowed close path, it is the only way out.
-- **The kubeconfig details live in the Settings view**, reachable from the sidebar footer. The
-  Settings view also lists, per resource kind, whether it has been loaded yet, how many items
-  it holds and when it was refreshed. Resource views show no connection chrome: a list that has
+  nothing. The close button in the top right therefore calls the drawer's `onClose` prop, which
+  the pod page wires to `setYamlTarget(null)` so it flips the `open` prop itself. Never remove that
+  button: between the disabled gestures and the swallowed close path, it is the only way out.
+- **The kubeconfig details live in the Settings page**, reachable from the sidebar footer and at
+  the `/settings` route. The
+  Settings page also lists, per resource kind, whether it has been loaded yet, how many items
+  it holds and when it was refreshed. Resource pages show no connection chrome: a list that has
   not loaded yet shows the spinner, and a failed load shows the error with its own retry.
-  Sidebar selection is local `view` state, and there is no routing and no backend method behind
-  Settings.
+  Settings maps to no kube kind and has no backend method behind it.
 - **The shadcn registry installs `cn` as an npm package**, imported as `import { cn } from
   "cn"`. There is no `src/lib/utils.ts` even though the `aliases.utils` key exists in
   `components.json`; do not create one expecting components to use it.
@@ -262,8 +286,11 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
 - Frontend: `src/main.tsx` mounts `<App/>` into `#root` and imports the Tailwind entry
   `src/style.css`. Styling is Tailwind utility classes plus shadcn components from
   `@/components/ui`; there is no per-component CSS file. Backend calls are imported as named
-  functions from `../wailsjs/go/main/App`, types from `../wailsjs/go/models`, events from
-  `../wailsjs/runtime`.
+  functions from `../wailsjs/go/main/App` (`../../wailsjs/go/main/App` from `src/pages`), types
+  from the same depth of `../wailsjs/go/models`, events from `../wailsjs/runtime`. Pages take
+  shared state from `@/app-context` rather than props through the router: a page that streams a
+  kind calls `useResource("<kind>")` (`@/use-resource`), and a page that streams nothing, such
+  as Settings, calls `useApp()`.
 - Add new UI primitives with the registry instead of hand-writing markup:
   `cd frontend && npx shadcn@latest add <component>`. Treat the generated files under
   `src/components/ui` as owned source that can be edited, and keep them monochrome.

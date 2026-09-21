@@ -3,6 +3,8 @@ import { syntaxHighlighting } from "@codemirror/language";
 import { cn } from "cn";
 import { basicSetup, EditorView } from "codemirror";
 import { useEffect, useRef } from "react";
+import { keymap } from "@codemirror/view";
+import { indentWithTab } from "@codemirror/commands";
 import { yamlHighlightStyle, yamlTheme } from "@/components/yaml-style";
 
 // YamlEditor mounts CodeMirror in edit mode and reports the document on every change. The view
@@ -40,6 +42,7 @@ export function YamlEditor({
 				yaml(),
 				syntaxHighlighting(yamlHighlightStyle),
 				yamlTheme,
+				keymap.of([indentWithTab]),
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged) {
 						onChangeRef.current(update.state.doc.toString());

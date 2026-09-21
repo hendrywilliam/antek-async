@@ -1,0 +1,10 @@
+build/bin
+node_modules
+frontend/dist
+
+# The app looks for a project kubeconfig here, and it can hold cluster credentials.
+.kube/
+kubeconfig
+
+# AI
+.crush

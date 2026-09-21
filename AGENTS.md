@@ -16,6 +16,9 @@ no write operations, no multi-cluster switching.
 | Node | v22 via nvm | Frontend deps live in `frontend/` |
 | React | 19 | Function components only |
 | Vite | 7 | Config at `frontend/vite.config.ts` |
+| Tailwind | v4 via `@tailwindcss/vite` | No `tailwind.config.js`; the entry is `frontend/src/style.css` |
+| shadcn/ui | CLI 4.x, `new-york` style | Config in `frontend/components.json`, components in `src/components/ui` |
+| Inter | `@fontsource-variable/inter` | Bundled locally (no network), wired through `--font-sans` at 14px |
 
 ## Commands
 
@@ -60,7 +63,9 @@ main  (Wails adapter)
 ─────────────────────────────────────────────────────────────────────────────
 app.go   AppState + App      bound methods, state, watch lifecycle, events
 main.go  wails.Run, Bind, OnStartup/OnShutdown
-frontend/src/App.tsx          table + config header, subscribes to state:update
+frontend/src/App.tsx          sidebar views (Pod, Settings), client-side filter/Group By
+frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
+frontend/src/components/ui    shadcn components (table, sidebar, button, ...)
 ```
 
 ### Backend
@@ -125,6 +130,39 @@ The frontend calls `GetState` on mount because events emitted before it subscrib
 - **React StrictMode mounts effects twice in dev.** `EventsOn` returns an unsubscribe
   function and `App.tsx` calls it in the effect cleanup; skipping that leaks a listener and
   duplicates every update.
+- **The app is dark only, and the palette is black, white and grey with one exception: status
+  text.** `index.html` hard codes `class="dark"` on `<html>` and the `.dark` block in
+  `src/style.css` is the active theme (pure black page, white text, lift comes from borders and
+  greys); the light `:root` set is an unused fallback that exists because shadcn expects it.
+  `main.go`'s window `BackgroundColour` must match the theme, since it shows before the webview
+  paints. `StatusLabel` in `App.tsx` is the only place allowed to use colour, taken from
+  Tailwind's default palette: `text-emerald-400` healthy, `text-amber-400` still starting,
+  `text-red-400` for failures. Status is plain coloured **text**, not a badge, so do not
+  reintroduce background or border chips. Do not add colour tokens to `style.css` for this.
+- **Base font is Inter at 14px.** `src/main.tsx` imports `@fontsource-variable/inter` (bundled
+  locally so the desktop app never needs the network) and `@theme inline` wires it through
+  `--font-sans`, which Tailwind's preflight picks up via `--default-font-family`. `body` sets
+  `font-size: 14px`, and markup relies on that inherited size instead of `text-xs`/`text-sm`
+  overrides, so keep new text at the base size.
+- **The pod table's filter and Group By are client side.** `App.tsx` filters and buckets the
+  in-memory snapshot (`filteredPods`, `groups`) and never asks the backend, so changing them
+  cannot trigger cluster requests. Grouping renders extra `TableRow`s with `colSpan`, which is
+  why the column count is a named `COLUMN_COUNT` constant.
+- **The kubeconfig details live in the Settings view**, reachable from the sidebar footer; the
+  Pod view deliberately shows no connection chrome beyond the error banner. Sidebar selection is
+  local `view` state, and there is no routing (and no backend method behind Settings).
+- **The shadcn registry installs `cn` as an npm package**, imported as `import { cn } from
+  "cn"`. There is no `src/lib/utils.ts` even though the `aliases.utils` key exists in
+  `components.json`; do not create one expecting components to use it.
+- **`@import "tw-animate-css"` in `src/style.css` is required** for the `animate-in` /
+  `animate-out` classes used by `sheet.tsx` and `tooltip.tsx`. Without it those classes are
+  missing from the built CSS and the sidebar sheet and tooltips appear without animation.
+- **The sticky table header depends on a CSS override** in `src/style.css`:
+  `[data-slot="table-container"] { max-height: 100%; overflow-y: auto; }`. The `Table`
+  component wraps the table in its own `overflow-x-auto` div, which would otherwise become
+  the nearest scrollport and stop `sticky top-0` on `TableHeader` from working.
+- `src/components/ui/*` and `src/hooks/use-mobile.ts` come from the shadcn registry. Re-adding
+  a component overwrites it, so re-apply any local edits after `npx shadcn@latest add`.
 - **Stale snapshots are dropped by an `App.generation` counter**, not by locking. A watcher
   that was superseded by a config switch can still be mid-callback, so `publish` and
   `setDisconnected` both ignore results whose generation is no longer current.
@@ -147,10 +185,14 @@ The frontend calls `GetState` on mount because events emitted before it subscrib
   `internal/kube` are written in Indonesian because they are displayed verbatim.
 - TypeScript: `strict` is on, `allowJs: false`, `noEmit: true`, `jsx: react-jsx`.
   `tsconfig.json` only includes `src/`, so `wailsjs/` itself is not type-checked.
-- Frontend: `src/main.tsx` mounts `<App/>` into `#root`; plain CSS imported per component
-  (`App.css`) plus global `style.css`. Backend calls are imported as named functions from
-  `../wailsjs/go/main/App`, types from `../wailsjs/go/models`, events from
+- Frontend: `src/main.tsx` mounts `<App/>` into `#root` and imports the Tailwind entry
+  `src/style.css`. Styling is Tailwind utility classes plus shadcn components from
+  `@/components/ui`; there is no per-component CSS file. Backend calls are imported as named
+  functions from `../wailsjs/go/main/App`, types from `../wailsjs/go/models`, events from
   `../wailsjs/runtime`.
+- Add new UI primitives with the registry instead of hand-writing markup:
+  `cd frontend && npx shadcn@latest add <component>`. Treat the generated files under
+  `src/components/ui` as owned source that can be edited, and keep them monochrome.
 
 ## Testing
 

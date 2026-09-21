@@ -9,6 +9,12 @@
     ],
     "allowJs": false,
     "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
     "esModuleInterop": false,
     "allowSyntheticDefaultImports": true,
     "strict": true,

@@ -2,6 +2,7 @@ import { Fragment, type ReactNode, useCallback, useMemo, useState } from "react"
 import { LoaderCircle } from "lucide-react";
 import { cn } from "cn";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
 	Select,
@@ -68,6 +69,9 @@ export function ResourceTable<T>({
 	error,
 	onRetry,
 	rowActions,
+	selectable,
+	toolbar,
+	notice = "",
 }: {
 	rows: T[];
 	columns: Column<T>[];
@@ -79,6 +83,13 @@ export function ResourceTable<T>({
 	error: string;
 	onRetry: () => void;
 	rowActions?: (item: T) => ReactNode;
+	// Selection is opt-in, and a table that offers a bulk action passes `selectable` together
+	// with a `toolbar`, which receives the ticked rows and is rendered above the table.
+	selectable?: boolean;
+	toolbar?: (selected: T[]) => ReactNode;
+	// A page that loads something besides the rows, such as CPU and memory, explains an empty
+	// extra column here rather than in a cell.
+	notice?: string;
 }) {
 	const [namespace, setNamespace] = useState(ALL_NAMESPACES);
 	const [query, setQuery] = useState("");
@@ -142,6 +153,36 @@ export function ResourceTable<T>({
 			.map(([key, grouped]) => ({ key, rows: grouped }));
 	}, [visible, groupBy, groupOptions]);
 
+	// Ticked rows are stored as keys and re-derived from the rows on every render, so a row
+	// that a delete or a changed kubeconfig removed cannot stay selected.
+	const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+	const selected = useMemo(
+		() => rows.filter((row) => selectedKeys.has(accessors.key(row))),
+		[rows, selectedKeys, accessors],
+	);
+
+	const visibleKeys = useMemo(
+		() => visible.map(accessors.key),
+		[visible, accessors],
+	);
+	const allVisibleSelected =
+		visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.has(key));
+	const someVisibleSelected = visibleKeys.some((key) => selectedKeys.has(key));
+
+	const setSelected = useCallback((keys: string[], next: boolean) => {
+		setSelectedKeys((current) => {
+			const updated = new Set(current);
+			for (const key of keys) {
+				if (next) {
+					updated.add(key);
+				} else {
+					updated.delete(key);
+				}
+			}
+			return updated;
+		});
+	}, []);
+
 	const filtering =
 		activeNamespace !== ALL_NAMESPACES ||
 		query.trim() !== "" ||
@@ -181,6 +222,12 @@ export function ResourceTable<T>({
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+			{toolbar && (
+				<div className="flex flex-wrap items-center gap-2">
+					{toolbar(selected)}
+				</div>
+			)}
+
 			<div className="flex flex-wrap items-center gap-2">
 				<Input
 					className="w-64"
@@ -223,12 +270,33 @@ export function ResourceTable<T>({
 						Reset filters
 					</Button>
 				)}
+
+				{notice !== "" && (
+					<span className="text-muted-foreground">{notice}</span>
+				)}
 			</div>
 
 			<div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
 				<Table>
 					<TableHeader className="sticky top-0 z-10 bg-background">
 						<TableRow>
+							{selectable && (
+								<TableHead className="w-10">
+									<Checkbox
+										aria-label={`Select all ${noun}`}
+										checked={
+											allVisibleSelected
+												? true
+												: someVisibleSelected
+													? "indeterminate"
+													: false
+										}
+										onCheckedChange={(checked) =>
+											setSelected(visibleKeys, checked === true)
+										}
+									/>
+								</TableHead>
+							)}
 							{columns.map((column) => (
 								<TableHead
 									key={column.header}
@@ -249,7 +317,11 @@ export function ResourceTable<T>({
 									<TableRow className="bg-muted/40 hover:bg-muted/40">
 										<TableCell
 											className="font-medium"
-											colSpan={columns.length + (rowActions ? 1 : 0)}
+											colSpan={
+												columns.length +
+												(selectable ? 1 : 0) +
+												(rowActions ? 1 : 0)
+											}
 										>
 											{group.key}
 											<span className="ml-2 text-muted-foreground">
@@ -258,22 +330,37 @@ export function ResourceTable<T>({
 										</TableCell>
 									</TableRow>
 								)}
-								{group.rows.map((row) => (
-									<TableRow key={accessors.key(row)}>
-										{columns.map((column) => (
-											<TableCell
-												key={column.header}
-												className={cn(
-													column.align === "right" && "text-right tabular-nums",
-													column.className,
-												)}
-											>
-												{column.render(row)}
-											</TableCell>
-										))}
-										{rowActions && <TableCell>{rowActions(row)}</TableCell>}
-									</TableRow>
-								))}
+								{group.rows.map((row) => {
+									const key = accessors.key(row);
+									return (
+										<TableRow key={key}>
+											{selectable && (
+												<TableCell className="w-10">
+													<Checkbox
+														aria-label={`Select ${accessors.name(row)}`}
+														checked={selectedKeys.has(key)}
+														onCheckedChange={(checked) =>
+															setSelected([key], checked === true)
+														}
+													/>
+												</TableCell>
+											)}
+											{columns.map((column) => (
+												<TableCell
+													key={column.header}
+													className={cn(
+														column.align === "right" &&
+															"text-right tabular-nums",
+														column.className,
+													)}
+												>
+													{column.render(row)}
+												</TableCell>
+											))}
+											{rowActions && <TableCell>{rowActions(row)}</TableCell>}
+										</TableRow>
+									);
+								})}
 							</Fragment>
 						))}
 					</TableBody>

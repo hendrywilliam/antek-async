@@ -2,14 +2,19 @@
 
 ## Project State
 
-`antek-async` is a Wails v2 desktop app that shows Kubernetes Nodes, Pods, Deployments and
-StatefulSets. Pods and the workload controllers span **all namespaces**; nodes are cluster
-scoped. It is deliberately small: no resource detail, no logs, no multi-cluster switching, and
+`antek-async` is a Wails v2 desktop app that shows Kubernetes Nodes, Namespaces, Pods,
+Deployments and StatefulSets. Pods and the workload controllers span **all namespaces**; nodes
+and namespaces are cluster scoped. It is deliberately small: no resource detail, no logs, no
+multi-cluster switching, and
 every list is filtered and grouped on the client. Each menu is fetched from the cluster **only
-when it is opened**, so nothing is listed or watched in the background. Two things step outside
+when it is opened**, so nothing is listed or watched in the background. The pod and node rows
+also carry CPU and memory, which come from metrics-server and are read by the page that shows
+them every five seconds while that page is open, because that API cannot be watched and has
+nothing to push. Three things step outside
 those lists: the pod table's actions dropdown opens a read-only YAML view of that pod in a
-CodeMirror drawer, and the **Editor** menu writes, sending one hand-written manifest to the
-cluster with server-side apply.
+CodeMirror drawer, the **Manifest YAML** menu writes, sending one hand-written manifest to the
+cluster with server-side apply, and the **Namespaces** menu deletes a namespace once the user
+has typed the confirmation word and the namespace name back.
 
 ## Stack / Toolchain
 
@@ -65,13 +70,19 @@ kubeconfig.go  Resolve()        manual > $KUBECONFIG > ~/.kube/config
                ClientFor()      rest.Config -> kubernetes.Interface
 nodes.go       NodeInfo         cluster scoped, no namespace
                                 kubectl STATUS / ROLES / VERSION columns
+namespaces.go  NamespaceInfo / WatchNamespaces / DeleteNamespace
+                                cluster scoped; kubectl NAME / STATUS / AGE columns;
+                                the only delete path
 pods.go        PodInfo / podStatus / WatchPods
                                 flattened rows + port of kubectl's STATUS logic
 deployments.go DeploymentInfo / WatchDeployments
 statefulsets.go StatefulSetInfo / WatchStatefulSets
+metrics.go     PodUsage / NodeUsage / PodUsages, NodeUsages
+                                CPU and memory from metrics.k8s.io, formatted the way
+                                kubectl top prints them; one request, no polling
 apply.go       ApplyResult / ApplyYAML
                                 server-side apply for any discovered kind
-watch.go       Resource         the four watched kinds, plumbing only:
+watch.go       Resource         the five watched kinds, plumbing only:
                                 watchInformer[T], sort helpers, replicaCount
 
 main  (Wails adapter)
@@ -85,15 +96,18 @@ frontend/src/routes.ts        route path/label/subtitle per menu; no cluster kin
 frontend/src/app-context.tsx  AppContext: AppState plus busy/error/run/reload
 frontend/src/use-resource.ts  per-page hook that starts the kind the page streams
 frontend/src/pages            one page per menu: pods, deployments, statefulsets,
-                              nodes, editor, settings
+                              nodes, namespaces, manifest-yaml, settings
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
 frontend/src/components/
   resource-table.tsx          generic table with filter/Group By on the client
-  status-label.tsx            StatusLabel/NodeStatusLabel, the only colour in the UI
+  status-label.tsx            StatusLabel/NodeStatusLabel/NamespaceStatusLabel, the
+                              only colour in the UI
+  usage-cell.tsx              CPU and memory stacked in one cell, CPU on top
   yaml-style.ts               shared monochrome CodeMirror theme and highlight
   yaml-viewer.tsx             read-only CodeMirror YAML viewer
   yaml-editor.tsx             editable CodeMirror YAML editor
   pod-yaml-drawer.tsx         drawer that fetches one pod via GetPodYAML
+  delete-namespace-dialog.tsx two-input confirmation, then DeleteNamespace
   ui/                         shadcn components (table, sidebar, button, ...)
 ```
 
@@ -102,20 +116,28 @@ frontend/src/components/
 - `internal/kube` is decoupled from Wails: each `WatchX` takes a `func([]X)` callback, so the
   whole cluster layer can be exercised by unit tests without a running app.
 - **One resource kind per file**, and a watcher streams exactly one kind: `WatchNodes`,
-  `WatchPods`, `WatchDeployments` and `WatchStatefulSets` each build their own single-informer
-  factory. The shared informer, flush and ticker plumbing lives once in `watchInformer[T]`
-  (`watch.go`), which is the only generic code in the package.
-- **Nodes are cluster scoped**, which shows up in three places: the probe and informer take no
-  namespace, `sortByName` replaces the namespace-then-name sort, and `NODE_ACCESSORS` in
-  `src/pages/nodes.tsx` omits `namespace` so the table hides the namespace filter and grouping.
+  `WatchNamespaces`, `WatchPods`, `WatchDeployments` and `WatchStatefulSets` each build their
+  own single-informer factory. The shared informer, flush and ticker plumbing lives once in
+  `watchInformer[T]` (`watch.go`), which is the only generic code in the package.
+- **Nodes and namespaces are cluster scoped**, which shows up in three places: the probe and
+  informer take no namespace, `sortByName` replaces the namespace-then-name sort, and the
+  accessors (`NODE_ACCESSORS` in `src/pages/nodes.tsx`, `NAMESPACE_ACCESSORS` in
+  `src/pages/namespaces.tsx`) omit `namespace`, so the table hides the namespace filter and
+  grouping.
 - `PodYAML` renders one pod as YAML for the drawer. Like `ApplyYAML`, it is not part of a watch,
   so `GetPodYAML` builds a short-lived client instead of reusing the active one, and it sets
   `apiVersion`/`kind` by hand (the typed client leaves them empty) and clears `managedFields`
   the way kubectl does by default.
-- `ApplyYAML` in `apply.go` is the only write path. It decodes one YAML or JSON document into an
-  `unstructured.Unstructured`, resolves the kind through discovery and `restmapper` so any kind
+- `ApplyYAML` in `apply.go` is the write path for creating and updating. It decodes one YAML or
+  JSON document into an `unstructured.Unstructured`, resolves the kind through discovery and
+  `restmapper` so any kind
   the cluster knows works, and sends it as a server-side apply `PATCH`. `Force` stays off, so a
   field another manager owns surfaces as a conflict instead of being taken over.
+- `DeleteNamespace` in `namespaces.go` is the only path that removes anything, and it deletes
+  exactly one namespace, named by the caller. Finalizers are left to the API server, so a
+  namespace that takes time to go drains in the watch as Terminating before it disappears. The
+  name is what the frontend makes the user type back before the call is sent; the backend only
+  refuses an empty one.
 - `Resolve` reads the environment and cwd, then delegates to `resolveKubeconfig`, which takes
   all four inputs as arguments. That split is what makes the precedence testable.
 - `Resolve` picks exactly **one** kubeconfig file (no merging), so a project config never
@@ -129,6 +151,18 @@ frontend/src/components/
   containers, then deletion state) and `Age` reuses `duration.HumanDuration`, the same helper
   kubectl uses. `deployments.go` and `statefulsets.go` follow the same idea for the READY /
   UP-TO-DATE / AVAILABLE counters kubectl prints.
+- **CPU and memory are not part of a watch.** Metrics come from the metrics-server API, which
+  has no watch and pushes nothing, so `metrics.go` offers one request per kind: `PodUsages` and
+  `NodeUsages`, reached through the two bound methods `GetPodUsages` / `GetNodeUsages`. Who
+  decides how often to ask are the two pages that show the numbers, not this package. The
+  numbers are formatted by
+  `formatCPU` and `formatMemory`, which are the helpers behind kubectl's CPU(cores) and
+  MEMORY(bytes) columns (millicores, and memory in mebibytes), and a pod's containers are summed
+  the way `kubectl top pod` sums them.
+- The metrics API is called through the discovery REST client with an `AbsPath` and decoded into
+  a hand-written subset of `metrics.k8s.io/v1beta1`, which keeps the package off the
+  `k8s.io/metrics` module: that module would have to be pinned to the client-go version for no
+  gain, since two endpoints and four fields are all the tables need.
 - `app.go` keeps a `resourceHolder[T]` per kind behind one `sync.RWMutex` and exposes everything
   as a single `AppState`. `startWatch` is the only way a watcher starts, so opening a menu,
   switching kubeconfig and "retry" all share one code path.
@@ -136,10 +170,15 @@ frontend/src/components/
 ### Backend to frontend contract
 
 `GetState`, `SelectResource`, `PickKubeconfig` and `ResetKubeconfig` all return the same
-`AppState`; `GetPodYAML` and `ApplyYAML` are the two on-demand requests outside the watch and
-return their own types. `AppState` carries the config plus one state object per resource
-(`nodes`, `pods`, `deployments`, `statefulSets`), each holding `items`, `loaded`, `loading`,
-`error` and `updatedAt`, so the frontend renders loading and failure per menu without guessing. Every change is also pushed on the `state:update` event with an identical
+`AppState`; `GetPodYAML`, `ApplyYAML`, `DeleteNamespace`, `GetPodUsages` and `GetNodeUsages` are
+the on-demand requests
+outside the watch and return their own types, and each of them reports its own failure to the
+page that asked instead of through `AppState`. `AppState` carries the config plus one state object per resource
+(`nodes`, `namespaces`, `pods`, `deployments`, `statefulSets`), each holding `items`, `loaded`,
+`loading`, `error` and `updatedAt`, so the frontend renders loading and failure per menu without
+guessing; CPU and memory are deliberately absent from it, because they belong to whoever polls
+them. Every change is
+also pushed on the `state:update` event with an identical
 payload, so the frontend has one reducer and never merges racing updates. The frontend calls
 `GetState` on mount because events emitted before it subscribed are lost.
 
@@ -225,9 +264,55 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   `components/resource-table.tsx` filters and buckets the in-memory rows and never asks the
   backend, so changing a filter cannot trigger cluster requests. Each page mounts its own
   `ResourceTable`, so switching sidebar entries starts from an unfiltered table, and a kind whose
-  accessors omit
-  `namespace` (nodes) renders no namespace filter or namespace grouping at all. Grouping renders
-  an extra `TableRow` whose `colSpan` follows the column count plus the optional actions cell.
+  accessors omit `namespace` (nodes, namespaces) renders no namespace filter or namespace
+  grouping at all. Grouping renders
+  an extra `TableRow` whose `colSpan` follows the column count plus the optional selection and
+  actions cells.
+- **Row selection is opt-in on the shared table.** A list that offers a bulk action passes
+  `selectable` and a `toolbar`, which `ResourceTable` renders above the table and calls with the
+  ticked rows; today only the namespaces page does, because deleting is the only bulk action.
+  The ticks are stored as row keys and re-derived from the rows on every render, so a namespace
+  that a delete removed cannot stay ticked, and the header checkbox covers the rows the filter
+  currently shows rather than every row in the cluster.
+- **The CPU and memory column is an overlay, not a row field.** The pods and nodes pages add one
+  `CPU / Memory` column of their own, spliced in right after `Ready` (pods) and after `Status`
+  (nodes, which has no Ready column) by header name rather than by index. It is built with
+  `useMemo` from the page's own `usage` state, because module-level column arrays
+  cannot see a per-render value, and the cell (`components/usage-cell.tsx`) stacks CPU over
+  memory from the entry whose key matches the row, or `-` when the cluster has no metrics for it.
+  That is why those two pages pass `notice` to `ResourceTable`: the page's `usageError` explains
+  the empty
+  column instead of taking over a cell, and the other pages leave the prop at its empty default.
+  Nothing here is per row state, so a refresh cannot disturb a filter or a tick.
+- **The metrics interval lives in the two pages that show the numbers.** `pods.tsx` and
+  `nodes.tsx` each run a `useEffect` that asks once, then on `USAGE_INTERVAL` (5s) until the page
+  unmounts; there is no hook in between, and nothing about the window changes the cadence.
+  Pausing it while the window was unfocused was tried twice and removed again, in a hook and then
+  in the page: it hung the refresh on focus and visibility signals that an embedded webview does
+  not deliver or answer reliably, so a signal that never arrived left the column frozen until the
+  menu was reopened. The only things that stop the poll are the ones that cannot fail to happen:
+  leaving the menu (unmount) and switching kubeconfig, which also drops the numbers belonging to
+  the previous cluster.
+- **The usage request is awaited inside a try, and that is what makes a failure visible.**
+  `GetPodUsages` / `GetNodeUsages` have to be able to fail loudly: a binding that is missing or a
+  cluster that refuses the call used to leave the column empty with no explanation, because a
+  synchronous throw skipped the promise chain and the state was never updated. Now any throw or
+  rejection lands in the page's own `usageError` and shows up as the table's `notice`. A tick
+  that lands while a request is still out is skipped, so a slow API server cannot stack requests,
+  and a failed ask empties the values, because stale numbers would read as current.
+- **The usage state belongs to the page, and to one kubeconfig.** The effects depend on
+  `state.config.path`, so a new kubeconfig clears the numbers instead of showing them against the
+  new cluster's rows. That state never goes through the shell's `run`, which means the poll cannot
+  flip the shared `busy` flag and disable the header buttons every five seconds. Unmounting the
+  page clears the interval, so switching menus stops the polling.
+- **The namespace delete is confirmed twice before it is sent.** The toolbar only queues the
+  ticked namespaces; `delete-namespace-dialog.tsx` is then mounted once per namespace with a
+  `key`, so its two inputs (the word `delete`, and the namespace name typed back) start empty
+  every time. Confirm checks both, refuses to send anything on a mismatch, and only then calls
+  `DeleteNamespace`. A multiple selection is walked one namespace at a time, Cancel drops the
+  rest of the queue, and the dialog reports a rejected delete in line instead of through the
+  shared error banner. Deleting does not refresh the list: the watch delivers the namespace as
+  Terminating and then as gone.
 - **The pod YAML drawer lives outside the watch.** `PodYamlDrawer
   (frontend/src/components/pod-yaml-drawer.tsx)` takes a `target` and an `onClose` callback and
   fetches by namespace/name through `GetPodYAML` itself, so it could be swapped for another
@@ -252,13 +337,15 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   nothing. The close button in the top right therefore calls the drawer's `onClose` prop, which
   the pod page wires to `setYamlTarget(null)` so it flips the `open` prop itself. Never remove that
   button: between the disabled gestures and the swallowed close path, it is the only way out.
-- **The Editor menu is the only write path, and it is deliberately hard to misuse.** `ApplyYAML`
-  sends exactly one document with server-side apply and `Force` off, so a field owned by another
-  manager surfaces as a conflict instead of being taken over. It refuses a manifest without
+- **The Manifest YAML menu is the only path that creates or updates, and it is deliberately
+  hard to misuse.** `ApplyYAML` sends exactly one document with server-side apply and `Force`
+  off, so a
+  field owned by another manager surfaces as a conflict instead of being taken over. It refuses
+  a manifest without
   `apiVersion`, `kind` or `metadata.name`, and it refuses more than one document rather than
   silently applying the first. A namespaced manifest without `metadata.namespace` lands in
   `default`, matching kubectl (`placement`), while a cluster-scoped kind has its namespace
-  stripped. There is no delete, no scale and no dry-run. The page reports its own outcome: the
+  stripped. There is no scale and no dry-run. The page reports its own outcome: the
   error goes inline in `text-red-400`, the same colour the YAML drawer uses, and a success is
   plain text, so the shared error banner stays reserved for configuration problems.
 - **The editor must not be rebuilt on every keystroke.** `YamlEditor`
@@ -269,9 +356,9 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   highlight style that the editor and the viewer share, so the two never drift apart. Only the
   viewer disables editing, because CodeMirror's `basicSetup` is editable by default; the editor
   therefore needed no new npm packages.
-- **The Editor streams no kube kind but still has a backend method.** Like Settings it uses
-  `useApp` rather than `useResource`, so the header offers no Reload there, but it is the one
-  non-listing page that talks to the cluster: `ApplyYAML` reads `App.config.Path` per call, so a
+- **The manifest page streams no kube kind but still has a backend method.** Like Settings it uses
+  `useApp` rather than `useResource`, so the header offers no Reload there, but it writes
+  anyway: `ApplyYAML` reads `App.config.Path` per call, so a
   kubeconfig switch changes where the next manifest lands. Applying does not refresh the cached
   lists, because re-opening a menu reconnects its watch anyway.
 - **The kubeconfig details live in the Settings page**, reachable from the sidebar footer and at
@@ -279,8 +366,8 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   Settings page also lists, per resource kind, whether it has been loaded yet, how many items
   it holds and when it was refreshed. Resource pages show no connection chrome: a list that has
   not loaded yet shows the spinner, and a failed load shows the error with its own retry.
-  Settings maps to no kube kind and has no backend method behind it, while the Editor streams
-  nothing and only calls `ApplyYAML`.
+  Settings maps to no kube kind and has no backend method behind it, while the Manifest YAML page
+  streams nothing and only calls `ApplyYAML`.
 - **The shadcn registry installs `cn` as an npm package**, imported as `import { cn } from
   "cn"`. There is no `src/lib/utils.ts` even though the `aliases.utils` key exists in
   `components.json`; do not create one expecting components to use it.
@@ -349,8 +436,19 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
 - `nodes_test.go` covers the node STATUS computation (Ready, NotReady, Unknown, a cordoned
   node and other conditions being ignored), the ROLES column (role-label prefix, legacy label,
   sorting and `<none>`), the VERSION/Age flattening, and name sorting.
+- `namespaces_test.go` covers the namespace flattening: the phase as the STATUS column, a
+  namespace stuck in Active with a deletion timestamp, a namespace without a phase, Age, and
+  name sorting. It also covers `DeleteNamespace` against the fake clientset: the namespace is
+  gone afterwards, and a namespace that was not there yields an error naming it.
+- `metrics_test.go` covers the CPU and memory path. The sums and the formatting are checked
+  against the same numbers kubectl's own printer test uses (0.2 + 0.2 cores becomes `400m`,
+  1Gi + 1Gi becomes `2048Mi`), and the two `Usages` readers are tested against an `httptest`
+  server, so the endpoint, the decode and the error wording are all exercised without a cluster:
+  a 404 reports which column failed and a malformed body is an error too. There is nothing here
+  about an interval, because the package no longer owns one.
 
 There is no integration test infrastructure: `go test ./...` never talks to a cluster. A
 throwaway test was used once to confirm that each watcher probes, syncs and publishes against
-the real kubeconfig on this machine (pods, deployments and statefulsets all reached the
-cluster), but it was deleted rather than checked in.
+the real kubeconfig on this machine (pods, deployments, statefulsets and namespaces all reached
+the cluster, and the metrics endpoints answered with real usage numbers), but it was deleted
+rather than checked in.

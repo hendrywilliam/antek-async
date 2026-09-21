@@ -17,6 +17,7 @@ import {
 	Box,
 	Boxes,
 	Database,
+	FolderTree,
 	Layers,
 	RotateCw,
 	Server,
@@ -49,7 +50,8 @@ import {
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { DeploymentsPage } from "@/pages/deployments";
-import { EditorPage } from "@/pages/editor";
+import { ManifestYamlPage } from "@/pages/manifest-yaml";
+import { NamespacesPage } from "@/pages/namespaces";
 import { NodesPage } from "@/pages/nodes";
 import { PodsPage } from "@/pages/pods";
 import { SettingsPage } from "@/pages/settings";
@@ -58,21 +60,22 @@ import { DEFAULT_PATH, ROUTES, routeForPath, type View } from "@/routes";
 
 const STATE_UPDATE_EVENT = "state:update";
 
-// Nodes are cluster scoped and get their own group above the namespaced workloads. The editor
-// writes rather than lists, so it sits in its own group below them.
+// Nodes and namespaces are cluster scoped and get their own group above the namespaced workloads.
+// The manifest page writes rather than lists, so it sits in its own group below them.
 const MENU_GROUPS: { label: string; views: View[] }[] = [
-	{ label: "Cluster", views: ["node"] },
+	{ label: "Cluster", views: ["node", "namespace"] },
 	{ label: "Workloads", views: ["pod", "deployment", "statefulset"] },
-	{ label: "Manifest", views: ["editor"] },
+	{ label: "Manifest", views: ["manifest"] },
 ];
 
 // Icons are presentation only, so they stay out of the route metadata.
 const VIEW_ICONS: Record<View, ComponentType<{ className?: string }>> = {
 	node: Server,
+	namespace: FolderTree,
 	pod: Box,
 	deployment: Layers,
 	statefulset: Database,
-	editor: SquarePen,
+	manifest: SquarePen,
 	settings: Settings,
 };
 
@@ -255,7 +258,8 @@ function AppShell() {
 							path={ROUTES.statefulset.path}
 						/>
 						<Route element={<NodesPage />} path={ROUTES.node.path} />
-						<Route element={<EditorPage />} path={ROUTES.editor.path} />
+						<Route element={<NamespacesPage />} path={ROUTES.namespace.path} />
+						<Route element={<ManifestYamlPage />} path={ROUTES.manifest.path} />
 						<Route element={<SettingsPage />} path={ROUTES.settings.path} />
 						<Route element={<Navigate replace to={DEFAULT_PATH} />} path="*" />
 					</Routes>

@@ -5,6 +5,12 @@ import {main} from '../models';
 
 export function ApplyYAML(arg1:string):Promise<kube.ApplyResult>;
 
+export function DeleteNamespace(arg1:string):Promise<void>;
+
+export function GetNodeUsages():Promise<Array<kube.NodeUsage>>;
+
+export function GetPodUsages():Promise<Array<kube.PodUsage>>;
+
 export function GetPodYAML(arg1:string,arg2:string):Promise<string>;
 
 export function GetState():Promise<main.AppState>;

@@ -49,6 +49,14 @@ type NodesState struct {
 	UpdatedAt string          `json:"updatedAt"`
 }
 
+type NamespacesState struct {
+	Items     []kube.NamespaceInfo `json:"items"`
+	Loaded    bool                 `json:"loaded"`
+	Loading   bool                 `json:"loading"`
+	Error     string               `json:"error"`
+	UpdatedAt string               `json:"updatedAt"`
+}
+
 // AppState is the single payload shared by GetState and the state:update event, so the
 // frontend needs one reducer and never has to merge racing updates.
 type AppState struct {
@@ -58,6 +66,7 @@ type AppState struct {
 	Deployments  DeploymentsState  `json:"deployments"`
 	StatefulSets StatefulSetsState `json:"statefulSets"`
 	Nodes        NodesState        `json:"nodes"`
+	Namespaces   NamespacesState   `json:"namespaces"`
 	Error        string            `json:"error"`
 }
 
@@ -89,6 +98,7 @@ type App struct {
 	deployments  resourceHolder[kube.DeploymentInfo]
 	statefulSets resourceHolder[kube.StatefulSetInfo]
 	nodes        resourceHolder[kube.NodeInfo]
+	namespaces   resourceHolder[kube.NamespaceInfo]
 }
 
 // NewApp creates a new App application struct
@@ -231,6 +241,71 @@ func (a *App) ApplyYAML(document string) (kube.ApplyResult, error) {
 	return kube.ApplyYAML(a.ctx, path, document, false)
 }
 
+// GetPodUsages returns the CPU and memory metrics-server reports for every pod, already
+// formatted the way kubectl prints them. Metrics have no watch, so this is a request the pods
+// page makes on its own schedule, which is what lets it stop asking while the window is not
+// being looked at. Like GetPodYAML it builds a short-lived client, because the call is not tied
+// to which watch happens to be running.
+func (a *App) GetPodUsages() ([]kube.PodUsage, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	if path == "" {
+		return nil, errors.New("Kubeconfig not found")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return kube.PodUsages(a.ctx, clientset)
+}
+
+// GetNodeUsages is GetPodUsages for the node metrics.
+func (a *App) GetNodeUsages() ([]kube.NodeUsage, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	if path == "" {
+		return nil, errors.New("Kubeconfig not found")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return kube.NodeUsages(a.ctx, clientset)
+}
+
+// DeleteNamespace removes one namespace from the cluster the active kubeconfig points at. Like
+// GetPodYAML it builds a short-lived client, because the namespace page's watch may not be the
+// one that is running. The error goes back to the caller, so the confirmation dialog can report
+// it instead of the shared error banner.
+func (a *App) DeleteNamespace(name string) error {
+	if name == "" {
+		return errors.New("Namespace name is required")
+	}
+
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	if path == "" {
+		return errors.New("Kubeconfig not found")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return err
+	}
+
+	return kube.DeleteNamespace(a.ctx, clientset, name)
+}
+
 // startWatch cancels every other watcher and streams the requested resource, so only the menu
 // that is open ever talks to the cluster.
 func (a *App) startWatch(resource kube.Resource) {
@@ -262,6 +337,8 @@ func (a *App) startWatch(resource kube.Resource) {
 		a.statefulSets.cancel, a.statefulSets.loading, a.statefulSets.err = cancel, true, ""
 	case kube.ResourceNodes:
 		a.nodes.cancel, a.nodes.loading, a.nodes.err = cancel, true, ""
+	case kube.ResourceNamespaces:
+		a.namespaces.cancel, a.namespaces.loading, a.namespaces.err = cancel, true, ""
 	default:
 		// Not a resource this app watches, so drop the context that was just built.
 		cancel()
@@ -303,6 +380,10 @@ func (a *App) streamResource(ctx context.Context, resource kube.Resource, path s
 		watchErr = kube.WatchNodes(ctx, clientset, func(items []kube.NodeInfo) {
 			a.publishNodes(generation, items)
 		})
+	case kube.ResourceNamespaces:
+		watchErr = kube.WatchNamespaces(ctx, clientset, func(items []kube.NamespaceInfo) {
+			a.publishNamespaces(generation, items)
+		})
 	}
 
 	if watchErr != nil && ctx.Err() == nil {
@@ -326,6 +407,10 @@ func (a *App) publishNodes(generation int, items []kube.NodeInfo) {
 	publishResource(a, &a.nodes, generation, items)
 }
 
+func (a *App) publishNamespaces(generation int, items []kube.NamespaceInfo) {
+	publishResource(a, &a.namespaces, generation, items)
+}
+
 // failResource records why a resource could not be streamed.
 func (a *App) failResource(resource kube.Resource, generation int, err error) {
 	switch resource {
@@ -337,12 +422,14 @@ func (a *App) failResource(resource kube.Resource, generation int, err error) {
 		failResource(a, &a.statefulSets, generation, err)
 	case kube.ResourceNodes:
 		failResource(a, &a.nodes, generation, err)
+	case kube.ResourceNamespaces:
+		failResource(a, &a.namespaces, generation, err)
 	}
 }
 
 // cancelWatchesLocked stops whichever watcher is running. Callers must hold a.mu.
 func (a *App) cancelWatchesLocked() {
-	for _, cancel := range []context.CancelFunc{a.pods.cancel, a.deployments.cancel, a.statefulSets.cancel, a.nodes.cancel} {
+	for _, cancel := range []context.CancelFunc{a.pods.cancel, a.deployments.cancel, a.statefulSets.cancel, a.nodes.cancel, a.namespaces.cancel} {
 		if cancel != nil {
 			cancel()
 		}
@@ -352,6 +439,7 @@ func (a *App) cancelWatchesLocked() {
 	a.deployments.cancel = nil
 	a.statefulSets.cancel = nil
 	a.nodes.cancel = nil
+	a.namespaces.cancel = nil
 }
 
 // resetResourcesLocked drops every cached list, because they belong to the previous cluster.
@@ -363,6 +451,7 @@ func (a *App) resetResourcesLocked() {
 	a.deployments = resourceHolder[kube.DeploymentInfo]{}
 	a.statefulSets = resourceHolder[kube.StatefulSetInfo]{}
 	a.nodes = resourceHolder[kube.NodeInfo]{}
+	a.namespaces = resourceHolder[kube.NamespaceInfo]{}
 }
 
 // setError records a recoverable failure, such as a dialog that could not be opened.
@@ -413,6 +502,13 @@ func (a *App) stateLocked() AppState {
 			Loading:   a.nodes.loading,
 			Error:     a.nodes.err,
 			UpdatedAt: a.nodes.updatedAt,
+		},
+		Namespaces: NamespacesState{
+			Items:     nonNil(a.namespaces.items),
+			Loaded:    a.namespaces.loaded,
+			Loading:   a.namespaces.loading,
+			Error:     a.namespaces.err,
+			UpdatedAt: a.namespaces.updatedAt,
 		},
 		Error: a.lastError,
 	}

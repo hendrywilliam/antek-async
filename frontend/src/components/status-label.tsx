@@ -38,3 +38,12 @@ export function NodeStatusLabel({ status }: { status: string }) {
 
 	return <span className={TONE_CLASSES[tone]}>{status}</span>;
 }
+
+// A namespace is Active for its whole life, and Terminating while its finalizers run, so it
+// gets its own mapping too.
+export function NamespaceStatusLabel({ status }: { status: string }) {
+	const tone =
+		status === "Active" ? "ok" : status === "Terminating" ? "warn" : "bad";
+
+	return <span className={TONE_CLASSES[tone]}>{status}</span>;
+}

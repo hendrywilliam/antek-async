@@ -98,6 +98,7 @@ export function SettingsPage() {
 				</p>
 				<div className="mt-3 grid gap-2">
 					<ResourceStatus label="Nodes" state={state?.nodes} />
+					<ResourceStatus label="Namespaces" state={state?.namespaces} />
 					<ResourceStatus label="Pods" state={state?.pods} />
 					<ResourceStatus label="Deployments" state={state?.deployments} />
 					<ResourceStatus label="StatefulSets" state={state?.statefulSets} />

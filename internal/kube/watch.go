@@ -18,6 +18,7 @@ type Resource string
 
 const (
 	ResourceNodes        Resource = "nodes"
+	ResourceNamespaces   Resource = "namespaces"
 	ResourcePods         Resource = "pods"
 	ResourceDeployments  Resource = "deployments"
 	ResourceStatefulSets Resource = "statefulSets"
@@ -26,7 +27,7 @@ const (
 // Valid reports whether the value names a resource this app can watch.
 func (r Resource) Valid() bool {
 	switch r {
-	case ResourceNodes, ResourcePods, ResourceDeployments, ResourceStatefulSets:
+	case ResourceNodes, ResourceNamespaces, ResourcePods, ResourceDeployments, ResourceStatefulSets:
 		return true
 	default:
 		return false

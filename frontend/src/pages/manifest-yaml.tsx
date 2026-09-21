@@ -6,8 +6,8 @@ import { useApp } from "@/app-context";
 import { Button } from "@/components/ui/button";
 import { YamlEditor } from "@/components/yaml-editor";
 
-// The editor always starts empty; clearing it remounts the component rather than pushing a new
-// document in, because the live value must never be fed back as the seed.
+// The manifest editor always starts empty; clearing it remounts the component rather than pushing a
+// new document in, because the live value must never be fed back as the seed.
 const EMPTY_DOCUMENT = "";
 
 // describeTarget names what was applied the way kubectl prints it, leaving the namespace out for
@@ -18,10 +18,10 @@ function describeTarget(target: kube.ApplyResult): string {
 		: `${target.kind} ${target.namespace}/${target.name}`;
 }
 
-// The editor streams no cluster kind, so it reads the shared state directly, the same way the
+// The manifest page streams no cluster kind, so it reads the shared state directly, the same way the
 // Settings page does. Its own outcome (applied or failed) stays local: a manifest the API server
 // rejected is not a configuration error for the whole shell.
-export function EditorPage() {
+export function ManifestYamlPage() {
 	const { state } = useApp();
 
 	const [document, setDocument] = useState("");

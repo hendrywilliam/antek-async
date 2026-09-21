@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
+import { GetPodUsages } from "../../wailsjs/go/main/App";
 import { kube } from "../../wailsjs/go/models";
 import { useResource } from "@/use-resource";
 import { PodYamlDrawer } from "@/components/pod-yaml-drawer";
@@ -11,6 +12,7 @@ import {
 	ResourceTable,
 } from "@/components/resource-table";
 import { StatusLabel } from "@/components/status-label";
+import { UsageCell } from "@/components/usage-cell";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -58,6 +60,10 @@ const POD_COLUMNS: Column<kube.PodInfo>[] = [
 // Stable empty slices keep ResourceTable's useMemo dependencies from changing every render.
 const NO_PODS: kube.PodInfo[] = [];
 
+// How often the page asks metrics-server for CPU and memory. It is not part of the watch, because
+// that API has no watch and pushes nothing.
+const USAGE_INTERVAL = 5000;
+
 export function PodsPage() {
 	const { state, reload } = useResource("pods");
 	const [yamlTarget, setYamlTarget] = useState<{
@@ -92,16 +98,94 @@ export function PodsPage() {
 	);
 
 	const pods = state?.pods;
+	const [usage, setUsage] = useState<kube.PodUsage[]>([]);
+	const [usageError, setUsageError] = useState("");
+
+	// Ask for CPU and memory on a plain interval, for as long as the page is open. The call is
+	// awaited inside a try because a call that throws or rejects has to land somewhere visible: an
+	// unnoticed one leaves the column empty with no explanation for it.
+	useEffect(() => {
+		let cancelled = false;
+		let inFlight = false;
+
+		// Numbers on screen belong to the kubeconfig they came from.
+		setUsage([]);
+		setUsageError("");
+
+		const ask = async () => {
+			// A slow API server must not stack requests.
+			if (inFlight) {
+				return;
+			}
+			inFlight = true;
+
+			try {
+				const next = await GetPodUsages();
+				if (!cancelled) {
+					setUsage(next ?? []);
+					setUsageError("");
+				}
+			} catch (err: unknown) {
+				if (!cancelled) {
+					setUsage([]);
+					setUsageError(String(err));
+				}
+			} finally {
+				inFlight = false;
+			}
+		};
+
+		ask();
+		const timer = window.setInterval(ask, USAGE_INTERVAL);
+
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+		};
+	}, [state?.config?.path]);
+
+	// The lookup is rebuilt from each snapshot instead of being kept per row, so a fresh poll can
+	// never disturb a filter or a tick.
+	const usageByPod = useMemo(
+		() =>
+			new Map(
+				usage.map((item) => [`${item.namespace}/${item.name}`, item] as const),
+			),
+		[usage],
+	);
+
+	// CPU and memory belong with the rest of the pod's numbers, so the column sits right after
+	// Ready. That is why the columns are built per snapshot rather than once at module level.
+	const columns = useMemo<Column<kube.PodInfo>[]>(() => {
+		const usageColumn: Column<kube.PodInfo> = {
+			header: "CPU / Memory",
+			align: "right",
+			render: (pod) => (
+				<UsageCell usage={usageByPod.get(`${pod.namespace}/${pod.name}`)} />
+			),
+		};
+
+		// Found by header rather than by index, so reordering the columns above cannot quietly
+		// move the metrics somewhere else.
+		const after = POD_COLUMNS.findIndex((column) => column.header === "Ready") + 1;
+
+		return [
+			...POD_COLUMNS.slice(0, after),
+			usageColumn,
+			...POD_COLUMNS.slice(after),
+		];
+	}, [usageByPod]);
 
 	return (
 		<>
 			<ResourceTable
 				accessors={POD_ACCESSORS}
-				columns={POD_COLUMNS}
+				columns={columns}
 				error={pods?.error ?? ""}
 				groups={POD_GROUPS}
 				loaded={pods?.loaded ?? false}
 				loading={pods?.loading ?? false}
+				notice={usageError}
 				noun="Pod"
 				onRetry={reload}
 				rowActions={podRowActions}

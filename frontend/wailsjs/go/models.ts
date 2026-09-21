@@ -56,6 +56,22 @@ export namespace kube {
 	        this.age = source["age"];
 	    }
 	}
+	export class NamespaceInfo {
+	    name: string;
+	    status: string;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NamespaceInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.status = source["status"];
+	        this.age = source["age"];
+	    }
+	}
 	export class NodeInfo {
 	    name: string;
 	    status: string;
@@ -74,6 +90,22 @@ export namespace kube {
 	        this.roles = source["roles"];
 	        this.version = source["version"];
 	        this.age = source["age"];
+	    }
+	}
+	export class NodeUsage {
+	    name: string;
+	    cpu: string;
+	    memory: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NodeUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.cpu = source["cpu"];
+	        this.memory = source["memory"];
 	    }
 	}
 	export class PodInfo {
@@ -100,6 +132,24 @@ export namespace kube {
 	        this.age = source["age"];
 	        this.ip = source["ip"];
 	        this.node = source["node"];
+	    }
+	}
+	export class PodUsage {
+	    namespace: string;
+	    name: string;
+	    cpu: string;
+	    memory: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PodUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.cpu = source["cpu"];
+	        this.memory = source["memory"];
 	    }
 	}
 	export class StatefulSetInfo {
@@ -167,6 +217,44 @@ export namespace kube {
 
 export namespace main {
 	
+	export class NamespacesState {
+	    items: kube.NamespaceInfo[];
+	    loaded: boolean;
+	    loading: boolean;
+	    error: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NamespacesState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], kube.NamespaceInfo);
+	        this.loaded = source["loaded"];
+	        this.loading = source["loading"];
+	        this.error = source["error"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class NodesState {
 	    items: kube.NodeInfo[];
 	    loaded: boolean;
@@ -326,6 +414,7 @@ export namespace main {
 	    deployments: DeploymentsState;
 	    statefulSets: StatefulSetsState;
 	    nodes: NodesState;
+	    namespaces: NamespacesState;
 	    error: string;
 	
 	    static createFrom(source: any = {}) {
@@ -340,6 +429,7 @@ export namespace main {
 	        this.deployments = this.convertValues(source["deployments"], DeploymentsState);
 	        this.statefulSets = this.convertValues(source["statefulSets"], StatefulSetsState);
 	        this.nodes = this.convertValues(source["nodes"], NodesState);
+	        this.namespaces = this.convertValues(source["namespaces"], NamespacesState);
 	        this.error = source["error"];
 	    }
 	
@@ -361,6 +451,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 	
 	
 	

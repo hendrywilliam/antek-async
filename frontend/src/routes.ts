@@ -2,10 +2,11 @@
 // cluster kind a page streams is the page's own business, so it is not listed here.
 export type View =
 	| "node"
+	| "namespace"
 	| "pod"
 	| "deployment"
 	| "statefulset"
-	| "editor"
+	| "manifest"
 	| "settings";
 
 export type RouteDef = {
@@ -40,10 +41,16 @@ export const ROUTES: Record<View, RouteDef> = {
 		label: "Nodes",
 		subtitle: "Cluster-wide",
 	},
-	editor: {
-		view: "editor",
-		path: "/editor",
-		label: "Editor",
+	namespace: {
+		view: "namespace",
+		path: "/namespaces",
+		label: "Namespaces",
+		subtitle: "Cluster-wide",
+	},
+	manifest: {
+		view: "manifest",
+		path: "/manifest",
+		label: "Manifest YAML",
 		subtitle: "Apply YAML to the cluster",
 	},
 	settings: {

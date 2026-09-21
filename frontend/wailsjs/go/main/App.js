@@ -6,6 +6,18 @@ export function ApplyYAML(arg1) {
   return window['go']['main']['App']['ApplyYAML'](arg1);
 }
 
+export function DeleteNamespace(arg1) {
+  return window['go']['main']['App']['DeleteNamespace'](arg1);
+}
+
+export function GetNodeUsages() {
+  return window['go']['main']['App']['GetNodeUsages']();
+}
+
+export function GetPodUsages() {
+  return window['go']['main']['App']['GetPodUsages']();
+}
+
 export function GetPodYAML(arg1, arg2) {
   return window['go']['main']['App']['GetPodYAML'](arg1, arg2);
 }

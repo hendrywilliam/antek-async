@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -13,14 +14,62 @@ import (
 // stateUpdateEvent carries every AppState change to the frontend.
 const stateUpdateEvent = "state:update"
 
-// AppState is the single payload shared by GetState and the state:update event, so
-// the frontend needs one reducer and never has to merge racing updates.
-type AppState struct {
-	Config    kube.Status    `json:"config"`
-	Pods      []kube.PodInfo `json:"pods"`
-	Connected bool           `json:"connected"`
-	UpdatedAt string         `json:"updatedAt"`
+// PodsState, DeploymentsState and StatefulSetsState are the per-resource slices of the payload.
+// They are concrete structs rather than one generic type because the binding generator cannot
+// name a generic instantiation.
+type PodsState struct {
+	Items     []kube.PodInfo `json:"items"`
+	Loaded    bool           `json:"loaded"`
+	Loading   bool           `json:"loading"`
 	Error     string         `json:"error"`
+	UpdatedAt string         `json:"updatedAt"`
+}
+
+type DeploymentsState struct {
+	Items     []kube.DeploymentInfo `json:"items"`
+	Loaded    bool                  `json:"loaded"`
+	Loading   bool                  `json:"loading"`
+	Error     string                `json:"error"`
+	UpdatedAt string                `json:"updatedAt"`
+}
+
+type StatefulSetsState struct {
+	Items     []kube.StatefulSetInfo `json:"items"`
+	Loaded    bool                   `json:"loaded"`
+	Loading   bool                   `json:"loading"`
+	Error     string                 `json:"error"`
+	UpdatedAt string                 `json:"updatedAt"`
+}
+
+type NodesState struct {
+	Items     []kube.NodeInfo `json:"items"`
+	Loaded    bool            `json:"loaded"`
+	Loading   bool            `json:"loading"`
+	Error     string          `json:"error"`
+	UpdatedAt string          `json:"updatedAt"`
+}
+
+// AppState is the single payload shared by GetState and the state:update event, so the
+// frontend needs one reducer and never has to merge racing updates.
+type AppState struct {
+	Config       kube.Status       `json:"config"`
+	Active       string            `json:"active"`
+	Pods         PodsState         `json:"pods"`
+	Deployments  DeploymentsState  `json:"deployments"`
+	StatefulSets StatefulSetsState `json:"statefulSets"`
+	Nodes        NodesState        `json:"nodes"`
+	Error        string            `json:"error"`
+}
+
+// resourceHolder is the cached list plus the watch bookkeeping for one resource kind. Only one
+// resource is watched at a time, and every field is guarded by App.mu.
+type resourceHolder[T any] struct {
+	items     []T
+	loaded    bool
+	loading   bool
+	err       string
+	updatedAt string
+	cancel    context.CancelFunc
 }
 
 // App struct
@@ -30,15 +79,16 @@ type App struct {
 	mu         sync.RWMutex
 	manualPath string // kubeconfig picked in the dialog, overrides auto-discovery
 	config     kube.Status
-	pods       []kube.PodInfo // last successful list, kept on screen during errors
-	connected  bool
-	updatedAt  string
+	active     kube.Resource
 	lastError  string
 
 	// generation identifies the active watch, so a superseded one cannot publish.
 	generation int
 
-	cancelWatch context.CancelFunc
+	pods         resourceHolder[kube.PodInfo]
+	deployments  resourceHolder[kube.DeploymentInfo]
+	statefulSets resourceHolder[kube.StatefulSetInfo]
+	nodes        resourceHolder[kube.NodeInfo]
 }
 
 // NewApp creates a new App application struct
@@ -51,21 +101,26 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	// Pods are the view the frontend opens first, so activating them here saves a round trip
+	// and puts the first load on the same code path as every later switch.
 	a.mu.Lock()
 	a.config = kube.Resolve(a.manualPath)
+	a.active = kube.ResourcePods
 	a.mu.Unlock()
 
-	a.restartWatch()
+	a.startWatch(kube.ResourcePods)
 }
 
-// shutdown stops the pod watch. The startup context is never cancelled by Wails,
-// so the watcher has to be stopped here.
+// shutdown stops the running watcher. The startup context is never cancelled by Wails, so the
+// watcher has to be stopped here.
 func (a *App) shutdown(context.Context) {
-	a.stopWatch()
+	a.mu.Lock()
+	a.cancelWatchesLocked()
+	a.mu.Unlock()
 }
 
-// GetState returns the config, pod list and connection status as one snapshot.
-// The frontend calls it on mount because events sent before it subscribed are lost.
+// GetState returns the config and every cached resource list as one snapshot. The frontend
+// calls it on mount because events sent before it subscribed are lost.
 func (a *App) GetState() AppState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -73,16 +128,34 @@ func (a *App) GetState() AppState {
 	return a.stateLocked()
 }
 
-// PickKubeconfig lets the user choose a kubeconfig file and switches to it for the
-// rest of the session. Cancelling the dialog leaves the state untouched, because
-// Wails reports a cancelled dialog as an empty path with a nil error.
+// SelectResource switches which resource is fetched: the previous watcher is cancelled and the
+// requested one starts. Selecting the active resource again reconnects it, which is what the
+// retry button needs.
+func (a *App) SelectResource(resource string) AppState {
+	requested := kube.Resource(resource)
+	if !requested.Valid() {
+		return a.GetState()
+	}
+
+	a.mu.Lock()
+	a.active = requested
+	a.mu.Unlock()
+
+	a.startWatch(requested)
+
+	return a.GetState()
+}
+
+// PickKubeconfig lets the user choose a kubeconfig file and switches to it for the rest of the
+// session. Cancelling the dialog leaves the state untouched, because Wails reports a cancelled
+// dialog as an empty path with a nil error.
 func (a *App) PickKubeconfig() AppState {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "Pilih file kubeconfig",
+		Title:            "Choose kubeconfig file",
 		DefaultDirectory: kube.DefaultConfigDir(),
 		Filters: []runtime.FileFilter{
 			{DisplayName: "Kubeconfig (*.yaml, *.yml, *.conf)", Pattern: "*.yaml;*.yml;*.conf"},
-			{DisplayName: "Semua file", Pattern: "*.*"},
+			{DisplayName: "All files", Pattern: "*.*"},
 		},
 	})
 	if err != nil {
@@ -96,9 +169,11 @@ func (a *App) PickKubeconfig() AppState {
 	a.mu.Lock()
 	a.manualPath = path
 	a.config = kube.Resolve(a.manualPath)
+	a.resetResourcesLocked()
+	active := a.active
 	a.mu.Unlock()
 
-	a.restartWatch()
+	a.startWatch(active)
 
 	return a.GetState()
 }
@@ -108,105 +183,167 @@ func (a *App) ResetKubeconfig() AppState {
 	a.mu.Lock()
 	a.manualPath = ""
 	a.config = kube.Resolve(a.manualPath)
+	a.resetResourcesLocked()
+	active := a.active
 	a.mu.Unlock()
 
-	a.restartWatch()
+	a.startWatch(active)
 
 	return a.GetState()
 }
 
-// RefreshPods reconnects by restarting the watch, which is the retry action the UI
-// offers after a connection error.
-func (a *App) RefreshPods() AppState {
-	a.restartWatch()
+// GetPodYAML returns one pod as YAML for the read-only viewer. It builds a short-lived client
+// instead of reusing the watch, because the viewer can be opened for a pod that the active menu
+// (for example Nodes) is not streaming.
+func (a *App) GetPodYAML(namespace, name string) (string, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
 
-	return a.GetState()
+	if path == "" {
+		return "", errors.New("Kubeconfig not found")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return "", err
+	}
+
+	return kube.PodYAML(a.ctx, clientset, namespace, name)
 }
 
-// restartWatch replaces the running watcher with one bound to the current kubeconfig.
-func (a *App) restartWatch() {
-	a.stopWatch()
-
+// startWatch cancels every other watcher and streams the requested resource, so only the menu
+// that is open ever talks to the cluster.
+func (a *App) startWatch(resource kube.Resource) {
 	a.mu.Lock()
+	a.cancelWatchesLocked()
+
 	path := a.config.Path
 	a.generation++
 	generation := a.generation
-	a.connected = false
+	a.mu.Unlock()
+
+	// Without a kubeconfig there is nothing to stream, so report it against the requested
+	// resource instead of leaving a loading state behind.
 	if path == "" {
-		a.lastError = a.config.Error
-		if a.lastError == "" {
-			a.lastError = "Kubeconfig tidak ditemukan"
-		}
-	} else {
-		a.lastError = ""
+		a.failResource(resource, generation, errors.New("Kubeconfig not found"))
+		return
 	}
+
+	a.mu.Lock()
 	ctx, cancel := context.WithCancel(a.ctx)
-	a.cancelWatch = cancel
-	a.mu.Unlock()
 
-	a.emit(a.GetState())
-
-	if path == "" {
-		return
-	}
-
-	go func() {
-		err := kube.Watch(ctx, path, func(pods []kube.PodInfo) {
-			a.publish(generation, pods)
-		})
-		if err != nil && ctx.Err() == nil {
-			a.setDisconnected(generation, err)
-		}
-	}()
-}
-
-// stopWatch cancels the running watcher, if any.
-func (a *App) stopWatch() {
-	a.mu.Lock()
-	cancel := a.cancelWatch
-	a.cancelWatch = nil
-	a.mu.Unlock()
-
-	if cancel != nil {
+	// The holder is picked by kind, which is also the only place the list type is known.
+	switch resource {
+	case kube.ResourcePods:
+		a.pods.cancel, a.pods.loading, a.pods.err = cancel, true, ""
+	case kube.ResourceDeployments:
+		a.deployments.cancel, a.deployments.loading, a.deployments.err = cancel, true, ""
+	case kube.ResourceStatefulSets:
+		a.statefulSets.cancel, a.statefulSets.loading, a.statefulSets.err = cancel, true, ""
+	case kube.ResourceNodes:
+		a.nodes.cancel, a.nodes.loading, a.nodes.err = cancel, true, ""
+	default:
+		// Not a resource this app watches, so drop the context that was just built.
 		cancel()
-	}
-}
-
-// publish stores a fresh snapshot and pushes it to the frontend. Snapshots from a
-// superseded watch are dropped, so a slow watcher cannot overwrite newer data.
-func (a *App) publish(generation int, pods []kube.PodInfo) {
-	a.mu.Lock()
-	if generation != a.generation {
 		a.mu.Unlock()
 		return
 	}
 
-	a.pods = pods
-	a.connected = true
-	a.lastError = ""
-	a.updatedAt = time.Now().Format(time.RFC3339)
 	state := a.stateLocked()
 	a.mu.Unlock()
 
 	a.emit(state)
+
+	go a.streamResource(ctx, resource, path, generation)
 }
 
-// setDisconnected records a connection failure. The last known pods are kept so the
-// table stays on screen next to the error banner. Failures from a superseded watch
-// are ignored for the same reason as in publish.
-func (a *App) setDisconnected(generation int, err error) {
-	a.mu.Lock()
-	if generation != a.generation {
-		a.mu.Unlock()
+// streamResource builds one client and watches a single resource until ctx is done.
+func (a *App) streamResource(ctx context.Context, resource kube.Resource, path string, generation int) {
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		a.failResource(resource, generation, err)
 		return
 	}
 
-	a.connected = false
-	a.lastError = err.Error()
-	state := a.stateLocked()
-	a.mu.Unlock()
+	var watchErr error
+	switch resource {
+	case kube.ResourcePods:
+		watchErr = kube.WatchPods(ctx, clientset, func(items []kube.PodInfo) {
+			a.publishPods(generation, items)
+		})
+	case kube.ResourceDeployments:
+		watchErr = kube.WatchDeployments(ctx, clientset, func(items []kube.DeploymentInfo) {
+			a.publishDeployments(generation, items)
+		})
+	case kube.ResourceStatefulSets:
+		watchErr = kube.WatchStatefulSets(ctx, clientset, func(items []kube.StatefulSetInfo) {
+			a.publishStatefulSets(generation, items)
+		})
+	case kube.ResourceNodes:
+		watchErr = kube.WatchNodes(ctx, clientset, func(items []kube.NodeInfo) {
+			a.publishNodes(generation, items)
+		})
+	}
 
-	a.emit(state)
+	if watchErr != nil && ctx.Err() == nil {
+		a.failResource(resource, generation, watchErr)
+	}
+}
+
+func (a *App) publishPods(generation int, items []kube.PodInfo) {
+	publishResource(a, &a.pods, generation, items)
+}
+
+func (a *App) publishDeployments(generation int, items []kube.DeploymentInfo) {
+	publishResource(a, &a.deployments, generation, items)
+}
+
+func (a *App) publishStatefulSets(generation int, items []kube.StatefulSetInfo) {
+	publishResource(a, &a.statefulSets, generation, items)
+}
+
+func (a *App) publishNodes(generation int, items []kube.NodeInfo) {
+	publishResource(a, &a.nodes, generation, items)
+}
+
+// failResource records why a resource could not be streamed.
+func (a *App) failResource(resource kube.Resource, generation int, err error) {
+	switch resource {
+	case kube.ResourcePods:
+		failResource(a, &a.pods, generation, err)
+	case kube.ResourceDeployments:
+		failResource(a, &a.deployments, generation, err)
+	case kube.ResourceStatefulSets:
+		failResource(a, &a.statefulSets, generation, err)
+	case kube.ResourceNodes:
+		failResource(a, &a.nodes, generation, err)
+	}
+}
+
+// cancelWatchesLocked stops whichever watcher is running. Callers must hold a.mu.
+func (a *App) cancelWatchesLocked() {
+	for _, cancel := range []context.CancelFunc{a.pods.cancel, a.deployments.cancel, a.statefulSets.cancel, a.nodes.cancel} {
+		if cancel != nil {
+			cancel()
+		}
+	}
+
+	a.pods.cancel = nil
+	a.deployments.cancel = nil
+	a.statefulSets.cancel = nil
+	a.nodes.cancel = nil
+}
+
+// resetResourcesLocked drops every cached list, because they belong to the previous cluster.
+// Callers must hold a.mu.
+func (a *App) resetResourcesLocked() {
+	a.cancelWatchesLocked()
+
+	a.pods = resourceHolder[kube.PodInfo]{}
+	a.deployments = resourceHolder[kube.DeploymentInfo]{}
+	a.statefulSets = resourceHolder[kube.StatefulSetInfo]{}
+	a.nodes = resourceHolder[kube.NodeInfo]{}
 }
 
 // setError records a recoverable failure, such as a dialog that could not be opened.
@@ -219,24 +356,92 @@ func (a *App) setError(err error) {
 	a.emit(state)
 }
 
-// emit sends the state to the frontend. The Wails runtime only accepts the context
-// handed to the lifecycle hooks, so a.ctx is used even from watcher goroutines.
+// emit sends the state to the frontend. The Wails runtime only accepts the context handed to
+// the lifecycle hooks, so a.ctx is used even from watcher goroutines.
 func (a *App) emit(state AppState) {
 	runtime.EventsEmit(a.ctx, stateUpdateEvent, state)
 }
 
 // stateLocked snapshots the state. Callers must hold a.mu.
 func (a *App) stateLocked() AppState {
-	pods := a.pods
-	if pods == nil {
-		pods = []kube.PodInfo{}
+	return AppState{
+		Config: a.config,
+		Active: string(a.active),
+		Pods: PodsState{
+			Items:     nonNil(a.pods.items),
+			Loaded:    a.pods.loaded,
+			Loading:   a.pods.loading,
+			Error:     a.pods.err,
+			UpdatedAt: a.pods.updatedAt,
+		},
+		Deployments: DeploymentsState{
+			Items:     nonNil(a.deployments.items),
+			Loaded:    a.deployments.loaded,
+			Loading:   a.deployments.loading,
+			Error:     a.deployments.err,
+			UpdatedAt: a.deployments.updatedAt,
+		},
+		StatefulSets: StatefulSetsState{
+			Items:     nonNil(a.statefulSets.items),
+			Loaded:    a.statefulSets.loaded,
+			Loading:   a.statefulSets.loading,
+			Error:     a.statefulSets.err,
+			UpdatedAt: a.statefulSets.updatedAt,
+		},
+		Nodes: NodesState{
+			Items:     nonNil(a.nodes.items),
+			Loaded:    a.nodes.loaded,
+			Loading:   a.nodes.loading,
+			Error:     a.nodes.err,
+			UpdatedAt: a.nodes.updatedAt,
+		},
+		Error: a.lastError,
+	}
+}
+
+// publishResource stores a fresh list for one resource and pushes the state to the frontend.
+// It is a free function because Go methods cannot take type parameters, and it drops results
+// from a superseded watch so a slow watcher cannot overwrite newer data.
+func publishResource[T any](a *App, holder *resourceHolder[T], generation int, items []T) {
+	a.mu.Lock()
+	if generation != a.generation {
+		a.mu.Unlock()
+		return
 	}
 
-	return AppState{
-		Config:    a.config,
-		Pods:      pods,
-		Connected: a.connected,
-		UpdatedAt: a.updatedAt,
-		Error:     a.lastError,
+	holder.items = items
+	holder.loaded = true
+	holder.loading = false
+	holder.err = ""
+	holder.updatedAt = time.Now().Format(time.RFC3339)
+	state := a.stateLocked()
+	a.mu.Unlock()
+
+	a.emit(state)
+}
+
+// failResource marks a resource as failed to load. The previous list is kept so the table stays
+// on screen next to the error.
+func failResource[T any](a *App, holder *resourceHolder[T], generation int, err error) {
+	a.mu.Lock()
+	if generation != a.generation {
+		a.mu.Unlock()
+		return
 	}
+
+	holder.loading = false
+	holder.err = err.Error()
+	state := a.stateLocked()
+	a.mu.Unlock()
+
+	a.emit(state)
+}
+
+// nonNil keeps the JSON payload free of nulls so the frontend can map over every list.
+func nonNil[T any](items []T) []T {
+	if items == nil {
+		return []T{}
+	}
+
+	return items
 }

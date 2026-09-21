@@ -52,8 +52,8 @@ untouched.
 
 ## 4. Point the app at it
 
-This app resolves the kubeconfig in one order: a manual pick through the **Pilih kubeconfig**
-(choose kubeconfig) button, then `$KUBECONFIG`, then `~/.kube/config`, then
+This app resolves the kubeconfig in one order: a manual pick through the **Choose kubeconfig**
+button, then `$KUBECONFIG`, then `~/.kube/config`, then
 `<project dir>/.kube/config`. Dropping the file at `~/.kube/config` is therefore enough, or
 you can select it straight from the dialog.
 

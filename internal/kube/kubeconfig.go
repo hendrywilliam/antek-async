@@ -62,9 +62,9 @@ func Resolve(manual string) Status {
 	status := Status{Source: source, Path: path, Candidates: candidates}
 	switch {
 	case manual != "" && source != SourceManual:
-		status.Error = fmt.Sprintf("File kubeconfig yang dipilih tidak ditemukan: %s", manual)
+		status.Error = fmt.Sprintf("Selected kubeconfig file not found: %s", manual)
 	case source == SourceNone:
-		status.Error = "Kubeconfig tidak ditemukan"
+		status.Error = "Kubeconfig not found"
 	}
 
 	if path == "" {
@@ -73,7 +73,7 @@ func Resolve(manual string) Status {
 
 	contextName, cluster, server, err := describeKubeconfig(path)
 	if err != nil {
-		status.Error = fmt.Sprintf("Gagal membaca kubeconfig: %v", err)
+		status.Error = fmt.Sprintf("Cannot read kubeconfig: %v", err)
 	}
 	status.Context, status.Cluster, status.Server = contextName, cluster, server
 
@@ -151,8 +151,9 @@ func DefaultConfigDir() string {
 	return ""
 }
 
-// clientFor builds a Kubernetes clientset for a single kubeconfig file.
-func clientFor(path string) (kubernetes.Interface, error) {
+// ClientFor builds a Kubernetes clientset for a single kubeconfig file. One client is shared
+// by whichever resource watcher is active.
+func ClientFor(path string) (kubernetes.Interface, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	// ExplicitPath makes Load() read this file only and fail loudly when missing.
 	rules.ExplicitPath = path
@@ -162,7 +163,7 @@ func clientFor(path string) (kubernetes.Interface, error) {
 	// and would tear down the pod watch on every interval.
 	restConfig, err := clientConfig.ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("gagal memuat kubeconfig %s: %w", path, err)
+		return nil, fmt.Errorf("cannot load kubeconfig %s: %w", path, err)
 	}
 
 	return kubernetes.NewForConfig(restConfig)

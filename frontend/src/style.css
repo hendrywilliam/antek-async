@@ -145,3 +145,14 @@
     max-height: 100%;
     overflow-y: auto;
 }
+
+/*
+ * The Drawer caps its right direction at 24rem with
+ * `data-[vaul-drawer-direction=right]:sm:max-w-sm`, which compiles to a selector with the same
+ * specificity as an override passed at the call site, so source order would decide against us.
+ * This rule is unlayered, and unlayered styles beat Tailwind's utilities layer, so the YAML
+ * drawer gets room to breathe without editing the registry component.
+ */
+[data-slot="drawer-content"][data-vaul-drawer-direction="right"] {
+    max-width: 48rem;
+}

@@ -2,23 +2,16 @@ package kube
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sort"
-	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-)
-
-const (
-	probeTimeout    = 15 * time.Second
-	flushInterval   = time.Second
-	ageRefreshEvery = 10 * time.Second
+	yaml "sigs.k8s.io/yaml"
 )
 
 type PodInfo struct {
@@ -28,61 +21,27 @@ type PodInfo struct {
 	Status    string `json:"status"`
 	Restarts  int32  `json:"restarts"`
 	Age       string `json:"age"`
+	IP        string `json:"ip"`
 	Node      string `json:"node"`
 }
 
-func Watch(ctx context.Context, path string, onSnapshot func([]PodInfo)) error {
-	clientset, err := clientFor(path)
-	if err != nil {
-		return err
-	}
-
-	probeCtx, cancelProbe := context.WithTimeout(ctx, probeTimeout)
-	_, probeErr := clientset.CoreV1().Pods("").List(probeCtx, metav1.ListOptions{Limit: 1})
-	cancelProbe()
-	if probeErr != nil {
-		return probeErr
-	}
-
+// WatchPods streams pod snapshots for one client, across all namespaces. It returns when ctx
+// is done, or when the probe or the first cache sync fails.
+func WatchPods(ctx context.Context, clientset kubernetes.Interface, onSnapshot func([]PodInfo)) error {
 	factory := informers.NewSharedInformerFactory(clientset, 0)
-	informer := factory.Core().V1().Pods().Informer()
 
-	var dirty atomic.Bool
-	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(any) { dirty.Store(true) },
-		UpdateFunc: func(any, any) { dirty.Store(true) },
-		DeleteFunc: func(any) { dirty.Store(true) },
-	}); err != nil {
-		return err
-	}
-
-	factory.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return errors.New("gagal sinkronisasi cache Pod")
-	}
-
-	onSnapshot(podsFromStore(informer.GetStore()))
-
-	flush := time.NewTicker(flushInterval)
-	defer flush.Stop()
-	refreshAge := time.NewTicker(ageRefreshEvery)
-	defer refreshAge.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-refreshAge.C:
-			dirty.Store(true)
-		case <-flush.C:
-			if dirty.Swap(false) {
-				onSnapshot(podsFromStore(informer.GetStore()))
-			}
-		}
-	}
+	return watchInformer(
+		ctx,
+		"Pod",
+		factory,
+		factory.Core().V1().Pods().Informer(),
+		func(probeCtx context.Context) error {
+			_, err := clientset.CoreV1().Pods("").List(probeCtx, metav1.ListOptions{Limit: 1})
+			return err
+		},
+		podsFromStore,
+		onSnapshot,
+	)
 }
 
 func podsFromStore(store cache.Store) []PodInfo {
@@ -98,14 +57,37 @@ func podsFromStore(store cache.Store) []PodInfo {
 		pods = append(pods, toPodInfo(pod, now))
 	}
 
-	sort.Slice(pods, func(i, j int) bool {
-		if pods[i].Namespace != pods[j].Namespace {
-			return pods[i].Namespace < pods[j].Namespace
-		}
-		return pods[i].Name < pods[j].Name
-	})
+	sortByNamespaceAndName(
+		pods,
+		func(pod PodInfo) string { return pod.Namespace },
+		func(pod PodInfo) string { return pod.Name },
+	)
 
 	return pods
+}
+
+// PodYAML renders one pod the way `kubectl get pod -o yaml` prints it. The type fields are set
+// by hand because the typed client leaves them empty, and managedFields is dropped because
+// kubectl hides that bookkeeping by default.
+func PodYAML(ctx context.Context, clientset kubernetes.Interface, namespace, name string) (string, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	pod, err := clientset.CoreV1().Pods(namespace).Get(requestCtx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("cannot read Pod %s/%s: %w", namespace, name, err)
+	}
+
+	pod.APIVersion = "v1"
+	pod.Kind = "Pod"
+	pod.ManagedFields = nil
+
+	document, err := yaml.Marshal(pod)
+	if err != nil {
+		return "", fmt.Errorf("cannot encode Pod %s/%s: %w", namespace, name, err)
+	}
+
+	return string(document), nil
 }
 
 func toPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
@@ -123,6 +105,12 @@ func toPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		node = "-"
 	}
 
+	// A pod without an address yet, which is the case while it is still pending.
+	ip := pod.Status.PodIP
+	if ip == "" {
+		ip = "-"
+	}
+
 	return PodInfo{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
@@ -130,6 +118,7 @@ func toPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		Status:    podStatus(pod),
 		Restarts:  restarts,
 		Age:       duration.HumanDuration(now.Sub(pod.CreationTimestamp.Time)),
+		IP:        ip,
 		Node:      node,
 	}
 }

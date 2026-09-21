@@ -2,9 +2,13 @@
 
 ## Project State
 
-`antek-async` is a Wails v2 desktop app that shows a live list of Kubernetes Pods
-across **all namespaces**. It is deliberately small: no filtering, no pod detail, no logs,
-no write operations, no multi-cluster switching.
+`antek-async` is a Wails v2 desktop app that shows Kubernetes Nodes, Pods, Deployments and
+StatefulSets. Pods and the workload controllers span **all namespaces**; nodes are cluster
+scoped. It is deliberately small: read-only, no resource detail, no logs, no write operations,
+no multi-cluster switching, and every list is filtered and grouped on the client. Each menu is
+fetched from the cluster **only when it is opened**, so nothing is listed or watched in the
+background. The one extra fetch is on demand: the pod table's actions dropdown can open a
+read-only YAML view of that pod in a CodeMirror drawer.
 
 ## Stack / Toolchain
 
@@ -19,6 +23,7 @@ no write operations, no multi-cluster switching.
 | Tailwind | v4 via `@tailwindcss/vite` | No `tailwind.config.js`; the entry is `frontend/src/style.css` |
 | shadcn/ui | CLI 4.x, `new-york` style | Config in `frontend/components.json`, components in `src/components/ui` |
 | Inter | `@fontsource-variable/inter` | Bundled locally (no network), wired through `--font-sans` at 14px |
+| CodeMirror | v6 + `@codemirror/lang-yaml` | Powers the read-only pod YAML drawer; adds ~300 kB to the bundle |
 
 ## Commands
 
@@ -54,45 +59,69 @@ internal/kube  (no Wails imports, unit-testable)
 kubeconfig.go  Resolve()        manual > $KUBECONFIG > ~/.kube/config
                                 > <cwd>/.kube/config, one file, no merging
                Status/Candidate what the UI shows about the active cluster
-               clientFor()      clientcmd -> kubernetes.Interface
-pods.go        PodInfo          flattened table row (kubectl columns)
-               podStatus()      port of kubectl's STATUS logic
-               Watch(ctx, path, onSnapshot)  informer list+watch, coalesced
+               ClientFor()      clientcmd -> kubernetes.Interface
+nodes.go       NodeInfo         cluster scoped, no namespace
+                                kubectl STATUS / ROLES / VERSION columns
+pods.go        PodInfo / podStatus / WatchPods
+                                flattened rows + port of kubectl's STATUS logic
+deployments.go DeploymentInfo / WatchDeployments
+statefulsets.go StatefulSetInfo / WatchStatefulSets
+watch.go       Resource         the four watched kinds, plumbing only:
+                                watchInformer[T], sort helpers, replicaCount
 
 main  (Wails adapter)
 ─────────────────────────────────────────────────────────────────────────────
-app.go   AppState + App      bound methods, state, watch lifecycle, events
+app.go   AppState + App      bound methods, per-resource state, watch lifecycle
+         resourceHolder[T]  one per kind; only the open menu is streamed
 main.go  wails.Run, Bind, OnStartup/OnShutdown
-frontend/src/App.tsx          sidebar views (Pod, Settings), client-side filter/Group By
+frontend/src/App.tsx          sidebar groups: Cluster > Nodes, Workloads > Pods,
+                              Deployments, StatefulSets; Settings in the footer
+                              one generic ResourceTable per kind, filter/Group By on the client
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
 frontend/src/components/ui    shadcn components (table, sidebar, button, ...)
 ```
 
 ### Backend
 
-- `internal/kube` is decoupled from Wails: `Watch` takes a `func([]PodInfo)` callback, so
-  the whole cluster layer can be exercised by unit tests without a running app.
+- `internal/kube` is decoupled from Wails: each `WatchX` takes a `func([]X)` callback, so the
+  whole cluster layer can be exercised by unit tests without a running app.
+- **One resource kind per file**, and a watcher streams exactly one kind: `WatchNodes`,
+  `WatchPods`, `WatchDeployments` and `WatchStatefulSets` each build their own single-informer
+  factory. The shared informer, flush and ticker plumbing lives once in `watchInformer[T]`
+  (`watch.go`), which is the only generic code in the package.
+- **Nodes are cluster scoped**, which shows up in three places: the probe and informer take no
+  namespace, `sortByName` replaces the namespace-then-name sort, and `NODE_ACCESSORS` in
+  `App.tsx` omits `namespace` so the table hides the namespace filter and grouping.
+- `PodYAML` renders one pod as YAML for the drawer. It is the only request that is not part of a
+  watch, so `GetPodYAML` builds a short-lived client instead of reusing the active one, and it
+  sets `apiVersion`/`kind` by hand (the typed client leaves them empty) and clears
+  `managedFields` the way kubectl does by default.
 - `Resolve` reads the environment and cwd, then delegates to `resolveKubeconfig`, which takes
   all four inputs as arguments. That split is what makes the precedence testable.
 - `Resolve` picks exactly **one** kubeconfig file (no merging), so a project config never
   mixes with the home one.
-- `Watch` runs one informer per kubeconfig and treats the informer's own cache as the source
-  of truth; no separate pod store exists. A `dirty` `atomic.Bool` set by the event handlers
-  is swapped by a 1s flush ticker, so a busy cluster cannot flood the webview. A second 10s
-  ticker forces a republish so the `Age` column does not go stale.
+- A watch treats the informer cache as the source of truth; no separate store exists. A `dirty`
+  `atomic.Bool` set by the event handlers is swapped by a 1s flush ticker, so a busy cluster
+  cannot flood the webview, and a second 10s ticker forces a republish so `Age` stays current.
+  Before syncing it probes the resource with a `Limit: 1` list, so a missing RBAC rule surfaces
+  as `cannot read <Kind>: ...` instead of a generic sync failure.
 - `podStatus` ports the logic behind kubectl's STATUS column (init containers, then
   containers, then deletion state) and `Age` reuses `duration.HumanDuration`, the same helper
-  kubectl uses.
-- `app.go` holds all state behind one `sync.RWMutex` and exposes it as a single `AppState`.
-  `restartWatch` is the only way a watcher starts, so switching kubeconfig and "retry" share
-  one code path.
+  kubectl uses. `deployments.go` and `statefulsets.go` follow the same idea for the READY /
+  UP-TO-DATE / AVAILABLE counters kubectl prints.
+- `app.go` keeps a `resourceHolder[T]` per kind behind one `sync.RWMutex` and exposes everything
+  as a single `AppState`. `startWatch` is the only way a watcher starts, so opening a menu,
+  switching kubeconfig and "retry" all share one code path.
 
 ### Backend to frontend contract
 
-Four bound methods, all returning the same `AppState`: `GetState`, `PickKubeconfig`,
-`ResetKubeconfig`, `RefreshPods`. Every change is also pushed on the `state:update` event
-with an identical payload, so the frontend has one reducer and never merges racing updates.
-The frontend calls `GetState` on mount because events emitted before it subscribed are lost.
+Four bound methods, all returning the same `AppState`: `GetState`, `SelectResource`,
+`PickKubeconfig`, `ResetKubeconfig`. `AppState` carries the config plus one state object per
+resource (`nodes`, `pods`, `deployments`, `statefulSets`), each holding `items`, `loaded`,
+`loading`, `error` and `updatedAt`, so the frontend renders loading and failure per menu
+without guessing. Every change is also pushed on the `state:update` event with an identical
+payload, so the frontend has one reducer and never merges racing updates. The frontend calls
+`GetState` on mount because events emitted before it subscribed are lost.
 
 ## Gotchas
 
@@ -144,13 +173,57 @@ The frontend calls `GetState` on mount because events emitted before it subscrib
   `--font-sans`, which Tailwind's preflight picks up via `--default-font-family`. `body` sets
   `font-size: 14px`, and markup relies on that inherited size instead of `text-xs`/`text-sm`
   overrides, so keep new text at the base size.
-- **The pod table's filter and Group By are client side.** `App.tsx` filters and buckets the
-  in-memory snapshot (`filteredPods`, `groups`) and never asks the backend, so changing them
-  cannot trigger cluster requests. Grouping renders extra `TableRow`s with `colSpan`, which is
-  why the column count is a named `COLUMN_COUNT` constant.
-- **The kubeconfig details live in the Settings view**, reachable from the sidebar footer; the
-  Pod view deliberately shows no connection chrome beyond the error banner. Sidebar selection is
-  local `view` state, and there is no routing (and no backend method behind Settings).
+- **Only the open menu is fetched, and switching menus cancels the previous watch.**
+  `SelectResource` bumps `App.generation`, cancels every running watcher and streams the
+  requested kind, so `internal/kube` never has more than one watch open. Opening the active
+  resource again is exactly the reload button, which is why there is no separate refresh method.
+  Previously watched lists stay cached in their `resourceHolder`, so returning to a menu shows
+  the old table immediately while it reconnects instead of flashing a spinner.
+- **Changing kubeconfig drops every cached list.** `resetResourcesLocked` exists for this: the
+  cached rows belong to the previous cluster, and showing them against a new kubeconfig would
+  look like the new cluster's data.
+- **The frontend calls `SelectResource` from click handlers, not from an effect keyed on the
+  view.** React StrictMode invokes mount effects twice in dev, which would start the same watch
+  twice. Go's `startup` activates pods so the first load needs no call from the frontend at all.
+- **The payload deliberately avoids generics.** `PodsState`, `DeploymentsState` and
+  `StatefulSetsState` are three concrete structs with the same shape because the Wails binding
+  generator cannot name a generic instantiation. The generic `resourceHolder[T]` and
+  `publishResource[T]`/`failResource[T]` helpers live on the Go side only, and `publishResource`
+  is a free function because Go methods cannot take type parameters.
+- **Every table's filter and Group By are client side.** The shared `ResourceTable` in
+  `App.tsx` filters and buckets the in-memory rows and never asks the backend, so changing
+  a filter cannot trigger cluster requests. Each view mounts its own `ResourceTable`, so
+  switching sidebar entries starts from an unfiltered table, and a kind whose accessors omit
+  `namespace` (nodes) renders no namespace filter or namespace grouping at all. Grouping renders
+  an extra `TableRow` whose `colSpan` follows the column count plus the optional actions cell.
+- **The pod YAML drawer lives outside the watch.** It fetches by namespace/name through
+  `GetPodYAML`, so it works from any menu, and the row actions arrive through `ResourceTable`'s
+  optional `rowActions` prop, which also widens the group header `colSpan`.
+- **CodeMirror's `basicSetup` registers its default highlight style as a fallback**, which is why
+  the monochrome `yamlHighlightStyle` in `App.tsx` wins without fighting it. Keep the editor
+  colourless: the theme sets `{dark: true}` and uses the app's CSS variables. Note that the
+  `codemirror` meta package does not re-export `EditorState`, and the read-only viewer needs only
+  `EditorView.editable.of(false)`.
+- **The YAML drawer opens from the right, and its width lives in `src/style.css`.** The Drawer
+  caps the right direction at `sm:max-w-sm` (24rem) via
+  `data-[vaul-drawer-direction=right]:sm:max-w-sm`, which compiles to the same specificity as any
+  override passed at the call site, so source order decides and the component's rule wins. The
+  unlayered `[data-slot="drawer-content"][data-vaul-drawer-direction="right"]` rule in
+  `style.css` beats Tailwind's `utilities` layer, so the drawer gets 48rem and `drawer.tsx` stays
+  pristine. A right drawer is full height, so the editor area is just `flex-1 min-h-0`.
+- **The YAML drawer can only be closed with its own button, and that button must set the
+  controlled state directly.** `dismissible={false}` makes vaul ignore overlay clicks, dragging
+  and Escape, but it also makes vaul swallow its own close path: the `onOpenChange` handler it
+  installs returns early when `open` is false, so a `DrawerClose` button would render and do
+  nothing. The close button in the top right therefore calls `setYamlTarget(null)`, which flips
+  the `open` prop itself. Never remove that button: between the disabled gestures and the
+  swallowed close path, it is the only way out.
+- **The kubeconfig details live in the Settings view**, reachable from the sidebar footer. The
+  Settings view also lists, per resource kind, whether it has been loaded yet, how many items
+  it holds and when it was refreshed. Resource views show no connection chrome: a list that has
+  not loaded yet shows the spinner, and a failed load shows the error with its own retry.
+  Sidebar selection is local `view` state, and there is no routing and no backend method behind
+  Settings.
 - **The shadcn registry installs `cn` as an npm package**, imported as `import { cn } from
   "cn"`. There is no `src/lib/utils.ts` even though the `aliases.utils` key exists in
   `components.json`; do not create one expecting components to use it.
@@ -181,8 +254,9 @@ The frontend calls `GetState` on mount because events emitted before it subscrib
   (for example `stateLocked` says callers must hold the lock). Keep new backend methods on
   `*App` so they are auto-bound.
 - Keep cluster and kubeconfig logic in `internal/kube` and free of Wails imports; `main` is
-  the adapter that holds state, emits events and opens dialogs. User-facing error strings in
-  `internal/kube` are written in Indonesian because they are displayed verbatim.
+  the adapter that holds state, emits events and opens dialogs. Every string the user can see
+  (dialog titles, error messages, table text) is written in English, because it is displayed
+  verbatim with no translation layer, so keep new user-facing strings English too.
 - TypeScript: `strict` is on, `allowJs: false`, `noEmit: true`, `jsx: react-jsx`.
   `tsconfig.json` only includes `src/`, so `wailsjs/` itself is not type-checked.
 - Frontend: `src/main.tsx` mounts `<App/>` into `#root` and imports the Tailwind entry
@@ -204,8 +278,14 @@ The frontend calls `GetState` on mount because events emitted before it subscrib
 - `pods_test.go` covers the kubectl-equivalent status computation (init containers, waiting
   and terminated reasons, completed pods that are still running, deletion states), the
   Ready/Restarts/Age/Node flattening, and snapshot sorting.
+- `deployments_test.go` and `statefulsets_test.go` cover the workload flattening: the READY
+  count when `spec.replicas` is absent, the UP-TO-DATE and AVAILABLE counters, Age, and the
+  sorting of each snapshot.
+- `nodes_test.go` covers the node STATUS computation (Ready, NotReady, Unknown, a cordoned
+  node and other conditions being ignored), the ROLES column (role-label prefix, legacy label,
+  sorting and `<none>`), the VERSION/Age flattening, and name sorting.
 
-There is no integration test infrastructure. Verifying real cluster behaviour means running
-`wails dev` against a reachable kubeconfig; the checked-in dev machine's cluster was not
-reachable, so that path was verified only through the unit tests above plus a bounded probe
-against a real kubeconfig file.
+There is no integration test infrastructure: `go test ./...` never talks to a cluster. A
+throwaway test was used once to confirm that each watcher probes, syncs and publishes against
+the real kubeconfig on this machine (pods, deployments and statefulsets all reached the
+cluster), but it was deleted rather than checked in.

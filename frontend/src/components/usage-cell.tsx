@@ -10,7 +10,7 @@ export function UsageCell({
 		<span className="flex flex-col leading-tight">
 			<span>CPU: {usage?.cpu ?? "-"}</span>
 			<span className="text-muted-foreground">
-				Memory {usage?.memory ?? "-"}
+				Memory: {usage?.memory ?? "-"}
 			</span>
 		</span>
 	);

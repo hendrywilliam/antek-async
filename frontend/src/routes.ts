@@ -6,6 +6,7 @@ export type View =
 	| "pod"
 	| "deployment"
 	| "statefulset"
+	| "service"
 	| "manifest"
 	| "settings";
 
@@ -46,6 +47,12 @@ export const ROUTES: Record<View, RouteDef> = {
 		path: "/namespaces",
 		label: "Namespaces",
 		subtitle: "Cluster-wide",
+	},
+	service: {
+		view: "service",
+		path: "/services",
+		label: "Services",
+		subtitle: "All namespaces",
 	},
 	manifest: {
 		view: "manifest",

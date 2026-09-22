@@ -19,6 +19,7 @@ import {
 	Database,
 	FolderTree,
 	Layers,
+	Network,
 	RotateCw,
 	Server,
 	Settings,
@@ -54,17 +55,20 @@ import { ManifestYamlPage } from "@/pages/manifest-yaml";
 import { NamespacesPage } from "@/pages/namespaces";
 import { NodesPage } from "@/pages/nodes";
 import { PodsPage } from "@/pages/pods";
+import { ServicesPage } from "@/pages/services";
 import { SettingsPage } from "@/pages/settings";
 import { StatefulSetsPage } from "@/pages/statefulsets";
 import { DEFAULT_PATH, ROUTES, routeForPath, type View } from "@/routes";
 
 const STATE_UPDATE_EVENT = "state:update";
 
-// Nodes and namespaces are cluster scoped and get their own group above the namespaced workloads.
-// The manifest page writes rather than lists, so it sits in its own group below them.
+// Nodes and namespaces are cluster scoped and get their own group above the namespaced workloads,
+// and the networking kinds sit between them and the write path. The manifest page writes rather
+// than lists, so it stays in its own group at the bottom.
 const MENU_GROUPS: { label: string; views: View[] }[] = [
 	{ label: "Cluster", views: ["node", "namespace"] },
 	{ label: "Workloads", views: ["pod", "deployment", "statefulset"] },
+	{ label: "Networking", views: ["service"] },
 	{ label: "Manifest", views: ["manifest"] },
 ];
 
@@ -75,6 +79,7 @@ const VIEW_ICONS: Record<View, ComponentType<{ className?: string }>> = {
 	pod: Box,
 	deployment: Layers,
 	statefulset: Database,
+	service: Network,
 	manifest: SquarePen,
 	settings: Settings,
 };
@@ -259,6 +264,7 @@ function AppShell() {
 						/>
 						<Route element={<NodesPage />} path={ROUTES.node.path} />
 						<Route element={<NamespacesPage />} path={ROUTES.namespace.path} />
+						<Route element={<ServicesPage />} path={ROUTES.service.path} />
 						<Route element={<ManifestYamlPage />} path={ROUTES.manifest.path} />
 						<Route element={<SettingsPage />} path={ROUTES.settings.path} />
 						<Route element={<Navigate replace to={DEFAULT_PATH} />} path="*" />

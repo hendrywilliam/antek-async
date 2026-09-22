@@ -57,6 +57,14 @@ type NamespacesState struct {
 	UpdatedAt string               `json:"updatedAt"`
 }
 
+type ServicesState struct {
+	Items     []kube.ServiceInfo `json:"items"`
+	Loaded    bool               `json:"loaded"`
+	Loading   bool               `json:"loading"`
+	Error     string             `json:"error"`
+	UpdatedAt string             `json:"updatedAt"`
+}
+
 // AppState is the single payload shared by GetState and the state:update event, so the
 // frontend needs one reducer and never has to merge racing updates.
 type AppState struct {
@@ -67,6 +75,7 @@ type AppState struct {
 	StatefulSets StatefulSetsState `json:"statefulSets"`
 	Nodes        NodesState        `json:"nodes"`
 	Namespaces   NamespacesState   `json:"namespaces"`
+	Services     ServicesState     `json:"services"`
 	Error        string            `json:"error"`
 }
 
@@ -99,6 +108,7 @@ type App struct {
 	statefulSets resourceHolder[kube.StatefulSetInfo]
 	nodes        resourceHolder[kube.NodeInfo]
 	namespaces   resourceHolder[kube.NamespaceInfo]
+	services     resourceHolder[kube.ServiceInfo]
 }
 
 // NewApp creates a new App application struct
@@ -339,6 +349,8 @@ func (a *App) startWatch(resource kube.Resource) {
 		a.nodes.cancel, a.nodes.loading, a.nodes.err = cancel, true, ""
 	case kube.ResourceNamespaces:
 		a.namespaces.cancel, a.namespaces.loading, a.namespaces.err = cancel, true, ""
+	case kube.ResourceServices:
+		a.services.cancel, a.services.loading, a.services.err = cancel, true, ""
 	default:
 		// Not a resource this app watches, so drop the context that was just built.
 		cancel()
@@ -384,6 +396,10 @@ func (a *App) streamResource(ctx context.Context, resource kube.Resource, path s
 		watchErr = kube.WatchNamespaces(ctx, clientset, func(items []kube.NamespaceInfo) {
 			a.publishNamespaces(generation, items)
 		})
+	case kube.ResourceServices:
+		watchErr = kube.WatchServices(ctx, clientset, func(items []kube.ServiceInfo) {
+			a.publishServices(generation, items)
+		})
 	}
 
 	if watchErr != nil && ctx.Err() == nil {
@@ -411,6 +427,10 @@ func (a *App) publishNamespaces(generation int, items []kube.NamespaceInfo) {
 	publishResource(a, &a.namespaces, generation, items)
 }
 
+func (a *App) publishServices(generation int, items []kube.ServiceInfo) {
+	publishResource(a, &a.services, generation, items)
+}
+
 // failResource records why a resource could not be streamed.
 func (a *App) failResource(resource kube.Resource, generation int, err error) {
 	switch resource {
@@ -424,12 +444,14 @@ func (a *App) failResource(resource kube.Resource, generation int, err error) {
 		failResource(a, &a.nodes, generation, err)
 	case kube.ResourceNamespaces:
 		failResource(a, &a.namespaces, generation, err)
+	case kube.ResourceServices:
+		failResource(a, &a.services, generation, err)
 	}
 }
 
 // cancelWatchesLocked stops whichever watcher is running. Callers must hold a.mu.
 func (a *App) cancelWatchesLocked() {
-	for _, cancel := range []context.CancelFunc{a.pods.cancel, a.deployments.cancel, a.statefulSets.cancel, a.nodes.cancel, a.namespaces.cancel} {
+	for _, cancel := range []context.CancelFunc{a.pods.cancel, a.deployments.cancel, a.statefulSets.cancel, a.nodes.cancel, a.namespaces.cancel, a.services.cancel} {
 		if cancel != nil {
 			cancel()
 		}
@@ -440,6 +462,7 @@ func (a *App) cancelWatchesLocked() {
 	a.statefulSets.cancel = nil
 	a.nodes.cancel = nil
 	a.namespaces.cancel = nil
+	a.services.cancel = nil
 }
 
 // resetResourcesLocked drops every cached list, because they belong to the previous cluster.
@@ -452,6 +475,7 @@ func (a *App) resetResourcesLocked() {
 	a.statefulSets = resourceHolder[kube.StatefulSetInfo]{}
 	a.nodes = resourceHolder[kube.NodeInfo]{}
 	a.namespaces = resourceHolder[kube.NamespaceInfo]{}
+	a.services = resourceHolder[kube.ServiceInfo]{}
 }
 
 // setError records a recoverable failure, such as a dialog that could not be opened.
@@ -509,6 +533,13 @@ func (a *App) stateLocked() AppState {
 			Loading:   a.namespaces.loading,
 			Error:     a.namespaces.err,
 			UpdatedAt: a.namespaces.updatedAt,
+		},
+		Services: ServicesState{
+			Items:     nonNil(a.services.items),
+			Loaded:    a.services.loaded,
+			Loading:   a.services.loading,
+			Error:     a.services.err,
+			UpdatedAt: a.services.updatedAt,
 		},
 		Error: a.lastError,
 	}

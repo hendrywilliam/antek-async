@@ -3,7 +3,8 @@
 ## Project State
 
 `antek-async` is a Wails v2 desktop app that shows Kubernetes Nodes, Namespaces, Pods,
-Deployments and StatefulSets. Pods and the workload controllers span **all namespaces**; nodes
+Deployments, StatefulSets and Services. Pods, the workload controllers and services span **all
+namespaces**; nodes
 and namespaces are cluster scoped. It is deliberately small: no resource detail, no logs, no
 multi-cluster switching, and
 every list is filtered and grouped on the client. Each menu is fetched from the cluster **only
@@ -77,12 +78,15 @@ pods.go        PodInfo / podStatus / WatchPods
                                 flattened rows + port of kubectl's STATUS logic
 deployments.go DeploymentInfo / WatchDeployments
 statefulsets.go StatefulSetInfo / WatchStatefulSets
+services.go    ServiceInfo / WatchServices
+                                kubectl NAME / TYPE / CLUSTER-IP / EXTERNAL-IP / PORT(S)
+                                / AGE columns
 metrics.go     PodUsage / NodeUsage / PodUsages, NodeUsages
                                 CPU and memory from metrics.k8s.io, formatted the way
                                 kubectl top prints them; one request, no polling
 apply.go       ApplyResult / ApplyYAML
                                 server-side apply for any discovered kind
-watch.go       Resource         the five watched kinds, plumbing only:
+watch.go       Resource         the six watched kinds, plumbing only:
                                 watchInformer[T], sort helpers, replicaCount
 
 main  (Wails adapter)
@@ -96,7 +100,7 @@ frontend/src/routes.ts        route path/label/subtitle per menu; no cluster kin
 frontend/src/app-context.tsx  AppContext: AppState plus busy/error/run/reload
 frontend/src/use-resource.ts  per-page hook that starts the kind the page streams
 frontend/src/pages            one page per menu: pods, deployments, statefulsets,
-                              nodes, namespaces, manifest-yaml, settings
+                              nodes, namespaces, services, manifest-yaml, settings
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
 frontend/src/components/
   resource-table.tsx          generic table with filter/Group By on the client
@@ -116,7 +120,8 @@ frontend/src/components/
 - `internal/kube` is decoupled from Wails: each `WatchX` takes a `func([]X)` callback, so the
   whole cluster layer can be exercised by unit tests without a running app.
 - **One resource kind per file**, and a watcher streams exactly one kind: `WatchNodes`,
-  `WatchNamespaces`, `WatchPods`, `WatchDeployments` and `WatchStatefulSets` each build their
+  `WatchNamespaces`, `WatchPods`, `WatchDeployments`, `WatchStatefulSets` and `WatchServices`
+  each build their
   own single-informer factory. The shared informer, flush and ticker plumbing lives once in
   `watchInformer[T]` (`watch.go`), which is the only generic code in the package.
 - **Nodes and namespaces are cluster scoped**, which shows up in three places: the probe and
@@ -174,7 +179,8 @@ frontend/src/components/
 the on-demand requests
 outside the watch and return their own types, and each of them reports its own failure to the
 page that asked instead of through `AppState`. `AppState` carries the config plus one state object per resource
-(`nodes`, `namespaces`, `pods`, `deployments`, `statefulSets`), each holding `items`, `loaded`,
+(`nodes`, `namespaces`, `pods`, `deployments`, `statefulSets`, `services`), each holding `items`,
+`loaded`,
 `loading`, `error` and `updatedAt`, so the frontend renders loading and failure per menu without
 guessing; CPU and memory are deliberately absent from it, because they belong to whoever polls
 them. Every change is
@@ -379,7 +385,11 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   component wraps the table in its own `overflow-x-auto` div, which would otherwise become
   the nearest scrollport and stop `sticky top-0` on `TableHeader` from working.
 - `src/components/ui/*` and `src/hooks/use-mobile.ts` come from the shadcn registry. Re-adding
-  a component overwrites it, so re-apply any local edits after `npx shadcn@latest add`.
+  a component overwrites it, so re-apply any local edits after `npx shadcn@latest add`. The one
+  edit to remember is in `table.tsx`: the registry ships `p-2` cells (`h-10 px-2` heads), and the
+  tables want roomier rows, so `TableCell` is `px-3 py-3` and `TableHead` is `h-12 px-3`. Every
+  table in the app takes that padding from the component, so there is no per-page override to
+  change.
 - **Stale snapshots are dropped by an `App.generation` counter**, not by locking. A watcher
   that was superseded by a config switch can still be mid-callback, so `publish` and
   `setDisconnected` both ignore results whose generation is no longer current.
@@ -440,6 +450,11 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   namespace stuck in Active with a deletion timestamp, a namespace without a phase, Age, and
   name sorting. It also covers `DeleteNamespace` against the fake clientset: the namespace is
   gone afterwards, and a namespace that was not there yields an error naming it.
+- `services_test.go` covers the service flattening the way kubectl prints it: the CLUSTER-IP
+  column including `None` for a headless service, the EXTERNAL-IP column for every type
+  (`<none>`, explicit external IPs, `<pending>` for a load balancer without an address, sorted
+  and deduplicated ingress addresses, and the ExternalName target), the PORT(S) column with and
+  without a node port, Age, and the namespace-then-name sorting.
 - `metrics_test.go` covers the CPU and memory path. The sums and the formatting are checked
   against the same numbers kubectl's own printer test uses (0.2 + 0.2 cores becomes `400m`,
   1Gi + 1Gi becomes `2048Mi`), and the two `Usages` readers are tested against an `httptest`
@@ -449,6 +464,6 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
 
 There is no integration test infrastructure: `go test ./...` never talks to a cluster. A
 throwaway test was used once to confirm that each watcher probes, syncs and publishes against
-the real kubeconfig on this machine (pods, deployments, statefulsets and namespaces all reached
-the cluster, and the metrics endpoints answered with real usage numbers), but it was deleted
-rather than checked in.
+the real kubeconfig on this machine (pods, deployments, statefulsets, namespaces and services all
+reached the cluster, and the metrics endpoints answered with real usage numbers), but it was
+deleted rather than checked in.

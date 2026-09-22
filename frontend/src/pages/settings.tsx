@@ -102,6 +102,7 @@ export function SettingsPage() {
 					<ResourceStatus label="Pods" state={state?.pods} />
 					<ResourceStatus label="Deployments" state={state?.deployments} />
 					<ResourceStatus label="StatefulSets" state={state?.statefulSets} />
+					<ResourceStatus label="Services" state={state?.services} />
 				</div>
 			</section>
 

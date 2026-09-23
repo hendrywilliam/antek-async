@@ -9,11 +9,15 @@ export function DeleteNamespace(arg1:string):Promise<void>;
 
 export function GetNodeUsages():Promise<Array<kube.NodeUsage>>;
 
+export function GetPodContainers(arg1:string,arg2:string):Promise<Array<string>>;
+
 export function GetPodUsages():Promise<Array<kube.PodUsage>>;
 
 export function GetPodYAML(arg1:string,arg2:string):Promise<string>;
 
 export function GetState():Promise<main.AppState>;
+
+export function OpenTerminal(arg1:kube.TerminalRequest):Promise<main.TerminalEndpoint>;
 
 export function PickKubeconfig():Promise<main.AppState>;
 

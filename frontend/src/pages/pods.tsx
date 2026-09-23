@@ -12,6 +12,7 @@ import {
 	ResourceTable,
 } from "@/components/resource-table";
 import { StatusLabel } from "@/components/status-label";
+import { TerminalDrawer } from "@/components/terminal-drawer";
 import { UsageCell } from "@/components/usage-cell";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,6 +71,10 @@ export function PodsPage() {
 		namespace: string;
 		name: string;
 	} | null>(null);
+	const [terminalTarget, setTerminalTarget] = useState<{
+		namespace: string;
+		name: string;
+	} | null>(null);
 
 	const podRowActions = useCallback(
 		(pod: kube.PodInfo) => (
@@ -84,10 +89,23 @@ export function PodsPage() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
+					{/* A pod offers one drawer at a time, so each action closes the other. */}
 					<DropdownMenuItem
-						onSelect={() =>
-							setYamlTarget({ namespace: pod.namespace, name: pod.name })
-						}
+						onSelect={() => {
+							setYamlTarget(null);
+							setTerminalTarget({
+								namespace: pod.namespace,
+								name: pod.name,
+							});
+						}}
+					>
+						Terminal
+					</DropdownMenuItem>
+					<DropdownMenuItem
+						onSelect={() => {
+							setTerminalTarget(null);
+							setYamlTarget({ namespace: pod.namespace, name: pod.name });
+						}}
 					>
 						View YAML
 					</DropdownMenuItem>
@@ -194,6 +212,10 @@ export function PodsPage() {
 			<PodYamlDrawer
 				onClose={() => setYamlTarget(null)}
 				target={yamlTarget}
+			/>
+			<TerminalDrawer
+				onClose={() => setTerminalTarget(null)}
+				target={terminalTarget}
 			/>
 		</>
 	);

@@ -109,11 +109,15 @@ type App struct {
 	nodes        resourceHolder[kube.NodeInfo]
 	namespaces   resourceHolder[kube.NamespaceInfo]
 	services     resourceHolder[kube.ServiceInfo]
+
+	// terminals serves the interactive sessions. It is outside the state above because a
+	// terminal is not a list: it is a live connection the drawer owns until it closes.
+	terminals *terminalServer
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	return &App{}
+	return &App{terminals: newTerminalServer()}
 }
 
 // startup is called when the app starts. The context is saved
@@ -132,12 +136,14 @@ func (a *App) startup(ctx context.Context) {
 	a.startWatch(kube.ResourcePods)
 }
 
-// shutdown stops the running watcher. The startup context is never cancelled by Wails, so the
-// watcher has to be stopped here.
+// shutdown stops the running watcher and every open terminal. The startup context is never
+// cancelled by Wails, so both have to be stopped here.
 func (a *App) shutdown(context.Context) {
 	a.mu.Lock()
 	a.cancelWatchesLocked()
 	a.mu.Unlock()
+
+	a.terminals.close()
 }
 
 // GetState returns the config and every cached resource list as one snapshot. The frontend
@@ -194,6 +200,10 @@ func (a *App) PickKubeconfig() AppState {
 	active := a.active
 	a.mu.Unlock()
 
+	// A shell belongs to the cluster it was started on, so the switch ends every session. It is
+	// done outside the lock because closing a session reaches into the terminal server.
+	a.terminals.closeSessions()
+
 	a.startWatch(active)
 
 	return a.GetState()
@@ -207,6 +217,9 @@ func (a *App) ResetKubeconfig() AppState {
 	a.resetResourcesLocked()
 	active := a.active
 	a.mu.Unlock()
+
+	// The sessions opened against the cluster that was just dropped have to go with it.
+	a.terminals.closeSessions()
 
 	a.startWatch(active)
 
@@ -231,6 +244,38 @@ func (a *App) GetPodYAML(namespace, name string) (string, error) {
 	}
 
 	return kube.PodYAML(a.ctx, clientset, namespace, name)
+}
+
+// GetPodContainers lists the containers a terminal can target in one pod, so a pod with sidecars
+// still gets a picker. Like GetPodYAML it builds a short-lived client, because it is not tied to
+// whichever watch happens to be running.
+func (a *App) GetPodContainers(namespace, name string) ([]string, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	if path == "" {
+		return nil, errors.New("Kubeconfig not found")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return kube.PodContainers(a.ctx, clientset, namespace, name)
+}
+
+// OpenTerminal validates a terminal request and returns the one-time endpoint that starts it.
+// Nothing is opened against the cluster until the drawer connects to that endpoint, so a drawer
+// closed while it is still starting leaves no session behind. The kubeconfig is read per call, so
+// the session is pinned to the cluster the user was looking at, not to a later switch.
+func (a *App) OpenTerminal(request kube.TerminalRequest) (TerminalEndpoint, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	return a.terminals.prepare(a.ctx, path, request)
 }
 
 // ApplyYAML sends one manifest to the active cluster with server-side apply, so the editor can

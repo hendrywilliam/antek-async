@@ -11,9 +11,10 @@ every list is filtered and grouped on the client. Each menu is fetched from the 
 when it is opened**, so nothing is listed or watched in the background. The pod and node rows
 also carry CPU and memory, which come from metrics-server and are read by the page that shows
 them every five seconds while that page is open, because that API cannot be watched and has
-nothing to push. Three things step outside
+nothing to push. Four things step outside
 those lists: the pod table's actions dropdown opens a read-only YAML view of that pod in a
-CodeMirror drawer, the **Manifest YAML** menu writes, sending one hand-written manifest to the
+CodeMirror drawer, the same dropdown opens an interactive **Terminal** in one of the pod's
+containers, the **Manifest YAML** menu writes, sending one hand-written manifest to the
 cluster with server-side apply, and the **Namespaces** menu deletes a namespace once the user
 has typed the confirmation word and the namespace name back.
 
@@ -31,6 +32,9 @@ has typed the confirmation word and the namespace name back.
 | Tailwind | v4 via `@tailwindcss/vite` | No `tailwind.config.js`; the entry is `frontend/src/style.css` |
 | shadcn/ui | CLI 4.x, `new-york` style | Config in `frontend/components.json`, components in `src/components/ui` |
 | Inter | `@fontsource-variable/inter` | Bundled locally (no network), wired through `--font-sans` at 14px |
+| JetBrains Mono | `@fontsource-variable/jetbrains-mono` | Bundled locally the same way, wired through `--font-mono`; a terminal cannot use Inter |
+| xterm.js | `@xterm/xterm` v6 + `@xterm/addon-fit` | The interactive pod terminal's emulator and its fit-to-box addon |
+| gorilla/websocket | v1.5.4-0.20250319132907-e064f32e3674 | The terminal's local listener; deliberately the version client-go already pins |
 | CodeMirror | v6 + `@codemirror/lang-yaml` | Powers the read-only pod YAML drawer; adds ~300 kB to the bundle |
 
 ## Commands
@@ -86,6 +90,9 @@ metrics.go     PodUsage / NodeUsage / PodUsages, NodeUsages
                                 kubectl top prints them; one request, no polling
 apply.go       ApplyResult / ApplyYAML
                                 server-side apply for any discovered kind
+terminal.go    TerminalRequest / PodContainers / ResolveContainer / ExecTerminal
+                                one interactive session: the exec URL, the WebSocket
+                                executor with SPDY behind it, and the size queue
 watch.go       Resource         the six watched kinds, plumbing only:
                                 watchInformer[T], sort helpers, replicaCount
 
@@ -93,6 +100,8 @@ main  (Wails adapter)
 ─────────────────────────────────────────────────────────────────────────────
 app.go   AppState + App      bound methods, per-resource state, watch lifecycle
          resourceHolder[T]  one per kind; only the open menu is streamed
+terminal.go terminalServer   the local WebSocket listener the terminal needs,
+         terminalSession    the one-time tickets, and the frame protocol
 main.go  wails.Run, Bind, OnStartup/OnShutdown
 frontend/src/App.tsx          HashRouter shell: sidebar links, header, error banner
                               and Routes
@@ -102,11 +111,13 @@ frontend/src/use-resource.ts  per-page hook that starts the kind the page stream
 frontend/src/pages            one page per menu: pods, deployments, statefulsets,
                               nodes, namespaces, services, manifest-yaml, settings
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
+frontend/src/use-terminal.ts  the pod terminal's xterm instance and WebSocket
 frontend/src/components/
   resource-table.tsx          generic table with filter/Group By on the client
   status-label.tsx            StatusLabel/NodeStatusLabel/NamespaceStatusLabel, the
                               only colour in the UI
   usage-cell.tsx              CPU and memory stacked in one cell, CPU on top
+  terminal-drawer.tsx         drawer with the container picker that hosts the terminal
   yaml-style.ts               shared monochrome CodeMirror theme and highlight
   yaml-viewer.tsx             read-only CodeMirror YAML viewer
   yaml-editor.tsx             editable CodeMirror YAML editor
@@ -143,6 +154,25 @@ frontend/src/components/
   namespace that takes time to go drains in the watch as Terminating before it disappears. The
   name is what the frontend makes the user type back before the call is sent; the backend only
   refuses an empty one.
+- **The pod terminal is the only interactive, long-lived connection in the app.** `ExecTerminal`
+  in `terminal.go` runs `exec` (not `attach`) in one container with a TTY, so it works on any pod
+  whose image carries a shell; `/bin/sh` is the default because it is the one shell every
+  non-distroless image has. It builds the executor `kubectl exec` builds, a WebSocket upgrade
+  with the SPDY protocol behind it, and only an upgrade failure falls back, so an error from
+  inside the container still reaches the drawer instead of being retried on the other protocol.
+  Like `ApplyYAML` it takes a kubeconfig path, because the executor needs the `*rest.Config` as
+  well as the REST client that builds the exec URL. It takes a `TermStreams` (stdin, stdout and a
+  channel of sizes) rather than a socket, which is what keeps this package free of the transport
+  and exercisable without a cluster.
+- `PodContainers` lists what a terminal can target in one pod and deliberately leaves
+  `initContainers` out, because they run to completion before the pod is up. `ResolveContainer`
+  defaults an empty request to the first container and refuses a name the pod does not declare,
+  where the message can say which container is missing instead of letting an exec request fail on
+  the wire.
+- **`ExecTerminal` must never pick up `requestTimeout`.** A terminal lives as long as the drawer
+  is open, so its session is bounded by its context alone; `rest.Config.Timeout` is left unset the
+  way `RestConfigFor` leaves it. `PodContainers`, being one bounded read, does use
+  `requestTimeout` like `PodYAML`.
 - `Resolve` reads the environment and cwd, then delegates to `resolveKubeconfig`, which takes
   all four inputs as arguments. That split is what makes the precedence testable.
 - `Resolve` picks exactly **one** kubeconfig file (no merging), so a project config never
@@ -171,11 +201,28 @@ frontend/src/components/
 - `app.go` keeps a `resourceHolder[T]` per kind behind one `sync.RWMutex` and exposes everything
   as a single `AppState`. `startWatch` is the only way a watcher starts, so opening a menu,
   switching kubeconfig and "retry" all share one code path.
+- **The terminal's transport is a loopback WebSocket server, because Wails cannot serve one.**
+  The asset server is not a real TCP listener and its `http.ResponseWriter` is not an
+  `http.Hijacker`, so a WebSocket upgrade cannot pass through it; `terminal.go` in `main`
+  therefore owns a `net.Listen` on `127.0.0.1:0`. Binding port zero lets the kernel pick a free
+  port, and the listener is created lazily on the first `OpenTerminal`, so a user who never opens
+  a terminal never has a port open. `shutdown` closes it.
+- **A ticket, not the port, is what protects a session.** Every local process can reach loopback
+  and a session runs a shell with the user's credentials, so `OpenTerminal` mints a single-use
+  32-byte token with a 30s TTL and only a connection that spends it gets a session; stale tickets
+  are swept when a new one is issued rather than on a timer. `CheckOrigin` is set as well, but
+  gorilla's default could never work here: it compares the Origin host against the request Host,
+  and the webview reports a `wails://` origin while the request goes to `127.0.0.1`, so the
+  default would refuse every handshake.
+- A ticket captures the kubeconfig path, so a session stays on the cluster it was prepared
+  against, and a kubeconfig switch ends every live session: a shell belongs to the cluster it was
+  started on.
 
 ### Backend to frontend contract
 
 `GetState`, `SelectResource`, `PickKubeconfig` and `ResetKubeconfig` all return the same
-`AppState`; `GetPodYAML`, `ApplyYAML`, `DeleteNamespace`, `GetPodUsages` and `GetNodeUsages` are
+`AppState`; `GetPodYAML`, `GetPodContainers`, `OpenTerminal`, `ApplyYAML`, `DeleteNamespace`,
+`GetPodUsages` and `GetNodeUsages` are
 the on-demand requests
 outside the watch and return their own types, and each of them reports its own failure to the
 page that asked instead of through `AppState`. `AppState` carries the config plus one state object per resource
@@ -187,6 +234,15 @@ them. Every change is
 also pushed on the `state:update` event with an identical
 payload, so the frontend has one reducer and never merges racing updates. The frontend calls
 `GetState` on mount because events emitted before it subscribed are lost.
+
+The terminal is the one request that is not a single call. `GetPodContainers` and `OpenTerminal`
+are bound methods like the rest, but `OpenTerminal` only validates the request against the pod
+and returns a one-time endpoint; the session itself is a WebSocket at that endpoint, with a small
+protocol of its own. Output and typed input travel as **binary** frames, because a read can split
+a multi-byte character and only raw bytes survive that intact. The two control messages the
+drawer sends (a resize, and a request to end the session) and the two it receives (`ready`, then
+`exit` with a code and the cluster's own message) are JSON in **text** frames, so the frame type
+is the whole discriminator. Nothing about a session reaches `AppState` or `state:update`.
 
 ## Gotchas
 
@@ -324,6 +380,32 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   fetches by namespace/name through `GetPodYAML` itself, so it could be swapped for another
   kind's YAML; today only the pod page mounts it. The row actions arrive through
   `ResourceTable`'s optional `rowActions` prop, which also widens the group header `colSpan`.
+- **The terminal's WebSocket cannot be served by the Wails asset server**, so it is a separate
+  loopback listener. Two things are worth knowing before debugging one that will not open: the
+  page must be allowed to reach `ws://127.0.0.1` (loopback is normally exempt from ATS, but a
+  production `wails://` page is the case to check first), and a refused handshake is logged with
+  the observed `Origin` header, which is the only way to confirm the allowlist because each
+  platform reports a different origin.
+- **The terminal drawer's host element is state, not a ref object.** `useTerminal` takes the
+  element itself, and the drawer hands it over through `ref={setHost}`, so the hook re-runs when
+  the element appears. A `useRef` would be null on the first render, and the effect would return
+  early and never run again, which fails silently: the drawer opens on an empty box.
+- **`ws.binaryType = "arraybuffer"` is required on the client.** Without it the browser hands back
+  `Blob` objects, every chunk of output is dropped, and it looks like a terminal that connects and
+  then does nothing.
+- **The xterm theme uses literal hex, not the `style.css` tokens**, because xterm's colour parser
+  cannot read `oklch()`. The app is dark only, so the terminal carries its own grey ramp, and the
+  ANSI entries are deliberately part of it: a shell's colours are flattened to greys to keep the
+  terminal inside the app's black, white and grey rule.
+- **A session the user closed is not a failure.** The stream reports its context error as the
+  session's result, so `terminalSession.end` reports a clean exit whenever the session's context is
+  already done, and only carries an exit code or a reason otherwise.
+- **gorilla/websocket is pinned by client-go, not by this app.** It is imported directly for the
+  listener, but the version must stay `v1.5.4-0.20250319132907-e064f32e3674`, which is the one
+  `client-go` v0.35.4 already resolves. Pulling in the exec and SPDY packages also added
+  `github.com/moby/spdystream` and `github.com/mxk/go-flowrate` to `go.sum`; they were missing from
+  the cache and `go mod tidy` needed them, so expect the same after any change that touches the
+  exec path.
 - **CodeMirror's `basicSetup` registers its default highlight style as a fallback**, which is why
   the monochrome `yamlHighlightStyle` in `yaml-viewer.tsx` wins without fighting it. Keep the editor
   colourless: the theme sets `{dark: true}` and uses the app's CSS variables. Note that the
@@ -461,6 +543,18 @@ payload, so the frontend has one reducer and never merges racing updates. The fr
   server, so the endpoint, the decode and the error wording are all exercised without a cluster:
   a 404 reports which column failed and a malformed body is an error too. There is nothing here
   about an interval, because the package no longer owns one.
+- `terminal_test.go` covers the terminal's own logic: the container defaulting (an empty request
+  takes the first container, and a name the pod does not declare is refused by a message that
+  names it), the shell that fills in for a missing command, and the size queue (the size the
+  drawer already knows comes back from the first `Next` without waiting, a zero dimension is
+  skipped rather than sent, and `Next` reports nil once the session ends so the stream's resize
+  loop stops).
+- `terminal_test.go` in `main` covers the transport with no cluster at all, because the cluster
+  side is a `terminalRunner` field. A fake runner that echoes stdin proves the frame protocol end
+  to end (a `ready` text frame first, binary input returning as binary output, a resize reaching
+  the session, and `close` ending it as a clean exit), a runner that returns an `ExitError` proves
+  the code survives to the client, and the ticket store is checked for single use, expiry and a
+  404 for an unknown id. `allowedTerminalOrigin` is a table test.
 
 There is no integration test infrastructure: `go test ./...` never talks to a cluster. A
 throwaway test was used once to confirm that each watcher probes, syncs and publishes against

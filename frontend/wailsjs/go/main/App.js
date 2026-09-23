@@ -14,6 +14,10 @@ export function GetNodeUsages() {
   return window['go']['main']['App']['GetNodeUsages']();
 }
 
+export function GetPodContainers(arg1, arg2) {
+  return window['go']['main']['App']['GetPodContainers'](arg1, arg2);
+}
+
 export function GetPodUsages() {
   return window['go']['main']['App']['GetPodUsages']();
 }
@@ -24,6 +28,10 @@ export function GetPodYAML(arg1, arg2) {
 
 export function GetState() {
   return window['go']['main']['App']['GetState']();
+}
+
+export function OpenTerminal(arg1) {
+  return window['go']['main']['App']['OpenTerminal'](arg1);
 }
 
 export function PickKubeconfig() {

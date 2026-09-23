@@ -236,6 +236,28 @@ export namespace kube {
 		    return a;
 		}
 	}
+	export class TerminalRequest {
+	    namespace: string;
+	    pod: string;
+	    container: string;
+	    command: string[];
+	    cols: number;
+	    rows: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TerminalRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.pod = source["pod"];
+	        this.container = source["container"];
+	        this.command = source["command"];
+	        this.cols = source["cols"];
+	        this.rows = source["rows"];
+	    }
+	}
 
 }
 
@@ -520,6 +542,21 @@ export namespace main {
 	
 	
 	
+	
+	export class TerminalEndpoint {
+	    url: string;
+	    container: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TerminalEndpoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.container = source["container"];
+	    }
+	}
 
 }
 

@@ -16,6 +16,7 @@ import {
 import {
 	Box,
 	Boxes,
+	ChevronRight,
 	Database,
 	FolderTree,
 	Layers,
@@ -24,6 +25,7 @@ import {
 	Server,
 	Settings,
 	SquarePen,
+	Waypoints,
 } from "lucide-react";
 import {
 	GetState,
@@ -34,6 +36,11 @@ import { EventsOn } from "../wailsjs/runtime";
 import { main } from "../wailsjs/go/models";
 import { AppContext, type AppContextValue } from "@/app-context";
 import { Button } from "@/components/ui/button";
+import {
+	Collapsible,
+	CollapsibleContent,
+	CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
 import {
 	Sidebar,
@@ -47,10 +54,17 @@ import {
 	SidebarMenu,
 	SidebarMenuButton,
 	SidebarMenuItem,
+	SidebarMenuSub,
+	SidebarMenuSubButton,
+	SidebarMenuSubItem,
 	SidebarProvider,
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { DeploymentsPage } from "@/pages/deployments";
+import { GatewayClassesPage } from "@/pages/gateway-classes";
+import { GatewaysPage } from "@/pages/gateways";
+import { GRPCRoutesPage } from "@/pages/grpc-routes";
+import { HTTPRoutesPage } from "@/pages/http-routes";
 import { ManifestYamlPage } from "@/pages/manifest-yaml";
 import { NamespacesPage } from "@/pages/namespaces";
 import { NodesPage } from "@/pages/nodes";
@@ -62,18 +76,39 @@ import { DEFAULT_PATH, ROUTES, routeForPath, type View } from "@/routes";
 
 const STATE_UPDATE_EVENT = "state:update";
 
+// A menu entry is either a leaf view or a collapsible submenu. Only Gateway API needs a submenu,
+// because its kinds are CRDs that belong under Networking rather than beside it.
+type MenuEntry =
+	| { view: View }
+	| { label: string; icon: ComponentType<{ className?: string }>; views: View[] };
+
 // Nodes and namespaces are cluster scoped and get their own group above the namespaced workloads,
 // and the networking kinds sit between them and the write path. The manifest page writes rather
 // than lists, so it stays in its own group at the bottom.
-const MENU_GROUPS: { label: string; views: View[] }[] = [
-	{ label: "Cluster", views: ["node", "namespace"] },
-	{ label: "Workloads", views: ["pod", "deployment", "statefulset"] },
-	{ label: "Networking", views: ["service"] },
-	{ label: "Manifest", views: ["manifest"] },
+const MENU_GROUPS: { label: string; entries: MenuEntry[] }[] = [
+	{ label: "Cluster", entries: [{ view: "node" }, { view: "namespace" }] },
+	{
+		label: "Workloads",
+		entries: [{ view: "pod" }, { view: "deployment" }, { view: "statefulset" }],
+	},
+	{
+		label: "Networking",
+		entries: [
+			{ view: "service" },
+			{
+				label: "Gateway API",
+				icon: Waypoints,
+				views: ["gatewayClass", "gateway", "httpRoute", "grpcRoute"],
+			},
+		],
+	},
+	{ label: "Manifest", entries: [{ view: "manifest" }] },
 ];
 
-// Icons are presentation only, so they stay out of the route metadata.
-const VIEW_ICONS: Record<View, ComponentType<{ className?: string }>> = {
+// Icons are presentation only, so they stay out of the route metadata. The Gateway API children
+// are indented under their own parent button and carry no icon of their own, so they are
+// deliberately absent here rather than given four invented ones.
+const VIEW_ICONS: Partial<Record<View, ComponentType<{ className?: string }>>> = {
 	node: Server,
 	namespace: FolderTree,
 	pod: Box,
@@ -162,22 +197,71 @@ function AppShell() {
 								<SidebarGroupLabel>{group.label}</SidebarGroupLabel>
 								<SidebarGroupContent>
 									<SidebarMenu>
-										{group.views.map((view) => {
-											const item = ROUTES[view];
-											const Icon = VIEW_ICONS[view];
+										{group.entries.map((entry) => {
+											if ("view" in entry) {
+												const item = ROUTES[entry.view];
+												const Icon = VIEW_ICONS[entry.view];
+												return (
+													<SidebarMenuItem key={entry.view}>
+														<SidebarMenuButton
+															asChild
+															isActive={route?.view === entry.view}
+															tooltip={item.label}
+														>
+															<Link
+																onClick={reloadIfOpen(entry.view)}
+																to={item.path}
+															>
+																{Icon && <Icon />}
+																<span>{item.label}</span>
+															</Link>
+														</SidebarMenuButton>
+													</SidebarMenuItem>
+												);
+											}
+
+											// The submenu opens by itself when the page on screen is one of its children, so
+											// landing on a child route never hides the link that is active.
+											const SubIcon = entry.icon;
+											const open = entry.views.some(
+												(view) => route?.view === view,
+											);
 											return (
-												<SidebarMenuItem key={view}>
-													<SidebarMenuButton
-														asChild
-														isActive={route?.view === view}
-														tooltip={item.label}
-													>
-														<Link onClick={reloadIfOpen(view)} to={item.path}>
-															<Icon />
-															<span>{item.label}</span>
-														</Link>
-													</SidebarMenuButton>
-												</SidebarMenuItem>
+												<Collapsible
+													asChild
+													className="group/collapsible"
+													defaultOpen={open}
+													key={entry.label}
+												>
+													<SidebarMenuItem>
+														<CollapsibleTrigger asChild>
+															<SidebarMenuButton tooltip={entry.label}>
+																<SubIcon />
+																<span>{entry.label}</span>
+																<ChevronRight className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-90" />
+															</SidebarMenuButton>
+														</CollapsibleTrigger>
+														<CollapsibleContent>
+															<SidebarMenuSub>
+																{entry.views.map((view) => (
+																	<SidebarMenuSubItem key={view}>
+																		<SidebarMenuSubButton
+																			asChild
+																			isActive={route?.view === view}
+																		>
+																			<Link
+																				onClick={reloadIfOpen(view)}
+																				to={ROUTES[view].path}
+																			>
+																				<span>{ROUTES[view].label}</span>
+																			</Link>
+																		</SidebarMenuSubButton>
+																	</SidebarMenuSubItem>
+																))}
+															</SidebarMenuSub>
+														</CollapsibleContent>
+													</SidebarMenuItem>
+												</Collapsible>
 											);
 										})}
 									</SidebarMenu>
@@ -265,6 +349,19 @@ function AppShell() {
 						<Route element={<NodesPage />} path={ROUTES.node.path} />
 						<Route element={<NamespacesPage />} path={ROUTES.namespace.path} />
 						<Route element={<ServicesPage />} path={ROUTES.service.path} />
+						<Route
+							element={<GatewayClassesPage />}
+							path={ROUTES.gatewayClass.path}
+						/>
+						<Route element={<GatewaysPage />} path={ROUTES.gateway.path} />
+						<Route
+							element={<HTTPRoutesPage />}
+							path={ROUTES.httpRoute.path}
+						/>
+						<Route
+							element={<GRPCRoutesPage />}
+							path={ROUTES.grpcRoute.path}
+						/>
 						<Route element={<ManifestYamlPage />} path={ROUTES.manifest.path} />
 						<Route element={<SettingsPage />} path={ROUTES.settings.path} />
 						<Route element={<Navigate replace to={DEFAULT_PATH} />} path="*" />

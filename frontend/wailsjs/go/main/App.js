@@ -10,6 +10,22 @@ export function DeleteNamespace(arg1) {
   return window['go']['main']['App']['DeleteNamespace'](arg1);
 }
 
+export function GetGRPCRouteYAML(arg1, arg2) {
+  return window['go']['main']['App']['GetGRPCRouteYAML'](arg1, arg2);
+}
+
+export function GetGatewayClassYAML(arg1) {
+  return window['go']['main']['App']['GetGatewayClassYAML'](arg1);
+}
+
+export function GetGatewayYAML(arg1, arg2) {
+  return window['go']['main']['App']['GetGatewayYAML'](arg1, arg2);
+}
+
+export function GetHTTPRouteYAML(arg1, arg2) {
+  return window['go']['main']['App']['GetHTTPRouteYAML'](arg1, arg2);
+}
+
 export function GetNodeUsages() {
   return window['go']['main']['App']['GetNodeUsages']();
 }

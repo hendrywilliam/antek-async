@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -17,18 +16,23 @@ import (
 type Resource string
 
 const (
-	ResourceNodes        Resource = "nodes"
-	ResourceNamespaces   Resource = "namespaces"
-	ResourcePods         Resource = "pods"
-	ResourceDeployments  Resource = "deployments"
-	ResourceStatefulSets Resource = "statefulSets"
-	ResourceServices     Resource = "services"
+	ResourceNodes          Resource = "nodes"
+	ResourceNamespaces     Resource = "namespaces"
+	ResourcePods           Resource = "pods"
+	ResourceDeployments    Resource = "deployments"
+	ResourceStatefulSets   Resource = "statefulSets"
+	ResourceServices       Resource = "services"
+	ResourceGatewayClasses Resource = "gatewayClasses"
+	ResourceGateways       Resource = "gateways"
+	ResourceHTTPRoutes     Resource = "httpRoutes"
+	ResourceGRPCRoutes     Resource = "grpcRoutes"
 )
 
 // Valid reports whether the value names a resource this app can watch.
 func (r Resource) Valid() bool {
 	switch r {
-	case ResourceNodes, ResourceNamespaces, ResourcePods, ResourceDeployments, ResourceStatefulSets, ResourceServices:
+	case ResourceNodes, ResourceNamespaces, ResourcePods, ResourceDeployments, ResourceStatefulSets, ResourceServices,
+		ResourceGatewayClasses, ResourceGateways, ResourceHTTPRoutes, ResourceGRPCRoutes:
 		return true
 	default:
 		return false
@@ -42,6 +46,13 @@ const (
 	ageRefreshEvery = 10 * time.Second
 )
 
+// factoryStarter is the only part of a shared informer factory watchInformer uses. The Gateway
+// API factory is a different interface than the built-in one, so naming just this method lets
+// both stream through the same flush and ticker loop.
+type factoryStarter interface {
+	Start(stopCh <-chan struct{})
+}
+
 // watchInformer streams one resource kind. Each kind calls it with its own informer, probe and
 // converter, so the informer, flush and ticker plumbing lives in exactly one place instead of
 // being copied per resource.
@@ -52,7 +63,7 @@ const (
 func watchInformer[T any](
 	ctx context.Context,
 	noun string,
-	factory informers.SharedInformerFactory,
+	factory factoryStarter,
 	informer cache.SharedIndexInformer,
 	probe func(context.Context) error,
 	convert func(cache.Store) []T,

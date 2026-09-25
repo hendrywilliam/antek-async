@@ -7,6 +7,10 @@ export type View =
 	| "deployment"
 	| "statefulset"
 	| "service"
+	| "gatewayClass"
+	| "gateway"
+	| "httpRoute"
+	| "grpcRoute"
 	| "manifest"
 	| "settings";
 
@@ -52,6 +56,32 @@ export const ROUTES: Record<View, RouteDef> = {
 		view: "service",
 		path: "/services",
 		label: "Services",
+		subtitle: "All namespaces",
+	},
+	// The Gateway API kinds are CRDs, so they are separate routes under the same Networking
+	// menu rather than a resource this app compiles in.
+	gatewayClass: {
+		view: "gatewayClass",
+		path: "/gateway-classes",
+		label: "GatewayClass",
+		subtitle: "Cluster-wide",
+	},
+	gateway: {
+		view: "gateway",
+		path: "/gateways",
+		label: "Gateway",
+		subtitle: "All namespaces",
+	},
+	httpRoute: {
+		view: "httpRoute",
+		path: "/http-routes",
+		label: "HTTPRoute",
+		subtitle: "All namespaces",
+	},
+	grpcRoute: {
+		view: "grpcRoute",
+		path: "/grpc-routes",
+		label: "GRPCRoute",
 		subtitle: "All namespaces",
 	},
 	manifest: {

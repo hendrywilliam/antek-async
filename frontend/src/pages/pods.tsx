@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
-import { GetPodUsages } from "../../wailsjs/go/main/App";
+import { GetPodUsages, GetPodYAML } from "../../wailsjs/go/main/App";
 import { kube } from "../../wailsjs/go/models";
 import { useResource } from "@/use-resource";
-import { PodYamlDrawer } from "@/components/pod-yaml-drawer";
 import {
 	type Accessors,
 	type Column,
@@ -14,6 +13,7 @@ import {
 import { StatusLabel } from "@/components/status-label";
 import { TerminalDrawer } from "@/components/terminal-drawer";
 import { UsageCell } from "@/components/usage-cell";
+import { YamlDrawer } from "@/components/yaml-drawer";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -209,7 +209,9 @@ export function PodsPage() {
 				rowActions={podRowActions}
 				rows={pods?.items ?? NO_PODS}
 			/>
-			<PodYamlDrawer
+			<YamlDrawer
+				fetchYaml={GetPodYAML}
+				noun="Pod"
 				onClose={() => setYamlTarget(null)}
 				target={yamlTarget}
 			/>

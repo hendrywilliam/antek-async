@@ -10,6 +10,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	gatewayclient "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 )
 
 // Source identifies where the active kubeconfig was resolved from.
@@ -170,8 +171,8 @@ func RestConfigFor(path string) (*rest.Config, error) {
 	return restConfig, nil
 }
 
-// ClientFor builds a Kubernetes clientset for a single kubeconfig file. One client is shared
-// by whichever resource watcher is active.
+// ClientFor builds a Kubernetes clientset for a single kubeconfig file. One client per API
+// group is shared by whichever resource watcher is active.
 func ClientFor(path string) (kubernetes.Interface, error) {
 	restConfig, err := RestConfigFor(path)
 	if err != nil {
@@ -179,6 +180,18 @@ func ClientFor(path string) (kubernetes.Interface, error) {
 	}
 
 	return kubernetes.NewForConfig(restConfig)
+}
+
+// GatewayClientFor builds the Gateway API clientset for a single kubeconfig file. It is separate
+// from ClientFor because Gateway API is a set of CRDs: its types and clients live in the
+// gateway-api module, not in client-go.
+func GatewayClientFor(path string) (gatewayclient.Interface, error) {
+	restConfig, err := RestConfigFor(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return gatewayclient.NewForConfig(restConfig)
 }
 
 // describeKubeconfig reports the current context, cluster name and API server of a

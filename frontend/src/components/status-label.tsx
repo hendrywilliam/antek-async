@@ -47,3 +47,13 @@ export function NamespaceStatusLabel({ status }: { status: string }) {
 
 	return <span className={TONE_CLASSES[tone]}>{status}</span>;
 }
+
+// Gateway API conditions are the same kind of verdict as a Ready condition, so the GatewayClass
+// ACCEPTED and Gateway PROGRAMMED columns read as coloured text too. "<none>" is a condition a
+// controller has not written yet, which is why it shares the "still starting" amber.
+export function ConditionLabel({ status }: { status: string }) {
+	const tone =
+		status === "True" ? "ok" : status === "False" ? "bad" : "warn";
+
+	return <span className={TONE_CLASSES[tone]}>{status}</span>;
+}

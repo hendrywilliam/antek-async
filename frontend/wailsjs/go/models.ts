@@ -56,6 +56,86 @@ export namespace kube {
 	        this.age = source["age"];
 	    }
 	}
+	export class GRPCRouteInfo {
+	    namespace: string;
+	    name: string;
+	    hostnames: string;
+	    parentRefs: string;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GRPCRouteInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.hostnames = source["hostnames"];
+	        this.parentRefs = source["parentRefs"];
+	        this.age = source["age"];
+	    }
+	}
+	export class GatewayClassInfo {
+	    name: string;
+	    controller: string;
+	    accepted: string;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GatewayClassInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.controller = source["controller"];
+	        this.accepted = source["accepted"];
+	        this.age = source["age"];
+	    }
+	}
+	export class GatewayInfo {
+	    namespace: string;
+	    name: string;
+	    class: string;
+	    address: string;
+	    programmed: string;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GatewayInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.class = source["class"];
+	        this.address = source["address"];
+	        this.programmed = source["programmed"];
+	        this.age = source["age"];
+	    }
+	}
+	export class HTTPRouteInfo {
+	    namespace: string;
+	    name: string;
+	    hostnames: string;
+	    parentRefs: string;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HTTPRouteInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.hostnames = source["hostnames"];
+	        this.parentRefs = source["parentRefs"];
+	        this.age = source["age"];
+	    }
+	}
 	export class NamespaceInfo {
 	    name: string;
 	    status: string;
@@ -263,6 +343,158 @@ export namespace kube {
 
 export namespace main {
 	
+	export class GRPCRoutesState {
+	    items: kube.GRPCRouteInfo[];
+	    loaded: boolean;
+	    loading: boolean;
+	    error: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GRPCRoutesState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], kube.GRPCRouteInfo);
+	        this.loaded = source["loaded"];
+	        this.loading = source["loading"];
+	        this.error = source["error"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class HTTPRoutesState {
+	    items: kube.HTTPRouteInfo[];
+	    loaded: boolean;
+	    loading: boolean;
+	    error: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HTTPRoutesState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], kube.HTTPRouteInfo);
+	        this.loaded = source["loaded"];
+	        this.loading = source["loading"];
+	        this.error = source["error"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class GatewaysState {
+	    items: kube.GatewayInfo[];
+	    loaded: boolean;
+	    loading: boolean;
+	    error: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GatewaysState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], kube.GatewayInfo);
+	        this.loaded = source["loaded"];
+	        this.loading = source["loading"];
+	        this.error = source["error"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class GatewayClassesState {
+	    items: kube.GatewayClassInfo[];
+	    loaded: boolean;
+	    loading: boolean;
+	    error: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GatewayClassesState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], kube.GatewayClassInfo);
+	        this.loaded = source["loaded"];
+	        this.loading = source["loading"];
+	        this.error = source["error"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ServicesState {
 	    items: kube.ServiceInfo[];
 	    loaded: boolean;
@@ -500,6 +732,10 @@ export namespace main {
 	    nodes: NodesState;
 	    namespaces: NamespacesState;
 	    services: ServicesState;
+	    gatewayClasses: GatewayClassesState;
+	    gateways: GatewaysState;
+	    httpRoutes: HTTPRoutesState;
+	    grpcRoutes: GRPCRoutesState;
 	    error: string;
 	
 	    static createFrom(source: any = {}) {
@@ -516,6 +752,10 @@ export namespace main {
 	        this.nodes = this.convertValues(source["nodes"], NodesState);
 	        this.namespaces = this.convertValues(source["namespaces"], NamespacesState);
 	        this.services = this.convertValues(source["services"], ServicesState);
+	        this.gatewayClasses = this.convertValues(source["gatewayClasses"], GatewayClassesState);
+	        this.gateways = this.convertValues(source["gateways"], GatewaysState);
+	        this.httpRoutes = this.convertValues(source["httpRoutes"], HTTPRoutesState);
+	        this.grpcRoutes = this.convertValues(source["grpcRoutes"], GRPCRoutesState);
 	        this.error = source["error"];
 	    }
 	
@@ -537,6 +777,10 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	
+	
+	
 	
 	
 	

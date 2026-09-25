@@ -103,6 +103,13 @@ export function SettingsPage() {
 					<ResourceStatus label="Deployments" state={state?.deployments} />
 					<ResourceStatus label="StatefulSets" state={state?.statefulSets} />
 					<ResourceStatus label="Services" state={state?.services} />
+					<ResourceStatus
+						label="GatewayClass"
+						state={state?.gatewayClasses}
+					/>
+					<ResourceStatus label="Gateway" state={state?.gateways} />
+					<ResourceStatus label="HTTPRoute" state={state?.httpRoutes} />
+					<ResourceStatus label="GRPCRoute" state={state?.grpcRoutes} />
 				</div>
 			</section>
 

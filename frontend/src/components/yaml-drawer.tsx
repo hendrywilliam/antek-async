@@ -1,6 +1,5 @@
 import { LoaderCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { GetPodYAML } from "../../wailsjs/go/main/App";
 import { Button } from "@/components/ui/button";
 import {
 	Drawer,
@@ -11,14 +10,21 @@ import {
 } from "@/components/ui/drawer";
 import { YamlViewer } from "@/components/yaml-viewer";
 
-// PodYamlDrawer fetches a single pod on demand and shows it as read-only YAML, so it is
-// independent of the active watch and can be opened from any menu. Pass a null `target` to
-// keep it closed and call `onClose` to dismiss it.
-export function PodYamlDrawer({
+// YamlDrawer fetches one object on demand through the `fetchYaml` it is given and shows it as
+// read-only YAML, so it is independent of the active watch and can be opened from any menu. The
+// fetcher arrives as a prop because the drawer serves every kind; pages pass a module-level
+// function so its identity stays stable and the effect cannot re-run on each render. A
+// cluster-scoped kind hands over an empty namespace. Pass a null `target` to keep it closed and
+// call `onClose` to dismiss it.
+export function YamlDrawer({
 	target,
+	noun,
+	fetchYaml,
 	onClose,
 }: {
 	target: { namespace: string; name: string } | null;
+	noun: string;
+	fetchYaml: (namespace: string, name: string) => Promise<string>;
 	onClose: () => void;
 }) {
 	const namespace = target?.namespace ?? "";
@@ -29,7 +35,8 @@ export function PodYamlDrawer({
 	const [loading, setLoading] = useState(false);
 
 	useEffect(() => {
-		if (namespace === "" || name === "") {
+		// Only the name is required: a cluster-scoped kind has no namespace to wait for.
+		if (name === "") {
 			return;
 		}
 
@@ -38,7 +45,7 @@ export function PodYamlDrawer({
 		setError("");
 		setLoading(true);
 
-		GetPodYAML(namespace, name)
+		fetchYaml(namespace, name)
 			.then((result) => {
 				if (!cancelled) {
 					setDocument(result);
@@ -58,7 +65,7 @@ export function PodYamlDrawer({
 		return () => {
 			cancelled = true;
 		};
-	}, [namespace, name]);
+	}, [namespace, name, fetchYaml]);
 
 	return (
 		<Drawer
@@ -89,7 +96,9 @@ export function PodYamlDrawer({
 				</Button>
 				<DrawerHeader className="pr-12">
 					<DrawerTitle>{name}</DrawerTitle>
-					<DrawerDescription>{namespace} · Pod YAML</DrawerDescription>
+					<DrawerDescription>
+						{namespace === "" ? `${noun} YAML` : `${namespace} · ${noun} YAML`}
+					</DrawerDescription>
 				</DrawerHeader>
 				{/* A right drawer spans the full height, so the editor fills the rest. */}
 				<div className="min-h-0 flex-1 overflow-hidden border-t">

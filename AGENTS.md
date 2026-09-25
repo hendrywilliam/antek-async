@@ -3,20 +3,21 @@
 ## Project State
 
 `antek-async` is a Wails v2 desktop app that shows Kubernetes Nodes, Namespaces, Pods,
-Deployments, StatefulSets and Services. Pods, the workload controllers and services span **all
-namespaces**; nodes
-and namespaces are cluster scoped. It is deliberately small: no resource detail, no logs, no
+Deployments, StatefulSets, Services and the four Gateway API kinds (GatewayClass, Gateway,
+HTTPRoute and GRPCRoute). Pods, the workload controllers, services and the namespaced Gateway API
+kinds span **all namespaces**; nodes, namespaces and gateway classes are cluster scoped. It is
+deliberately small: no resource detail, no logs, no
 multi-cluster switching, and
 every list is filtered and grouped on the client. Each menu is fetched from the cluster **only
 when it is opened**, so nothing is listed or watched in the background. The pod and node rows
 also carry CPU and memory, which come from metrics-server and are read by the page that shows
 them every five seconds while that page is open, because that API cannot be watched and has
 nothing to push. Four things step outside
-those lists: the pod table's actions dropdown opens a read-only YAML view of that pod in a
-CodeMirror drawer, the same dropdown opens an interactive **Terminal** in one of the pod's
-containers, the **Manifest YAML** menu writes, sending one hand-written manifest to the
-cluster with server-side apply, and the **Namespaces** menu deletes a namespace once the user
-has typed the confirmation word and the namespace name back.
+those lists: each table's actions dropdown opens a read-only YAML view of its row in a CodeMirror
+drawer, and a pod's also opens an interactive **Terminal** in one of its containers, the
+**Manifest YAML** menu writes, sending one hand-written manifest to the cluster with server-side
+apply, and the **Namespaces** menu deletes a namespace once the user has typed the confirmation
+word and the namespace name back.
 
 ## Stack / Toolchain
 
@@ -25,6 +26,7 @@ has typed the confirmation word and the namespace name back.
 | Go | 1.25.0 (declared in `go.mod`) | Module name is bare `antek-async`, not a URL path |
 | Wails | v2.16.0 (`go.mod`) | CLI `wails` v2.16.0 must be on `PATH` (`~/go/bin/wails`) |
 | client-go | v0.35.4 | Pinned deliberately, see the gotcha below |
+| sigs.k8s.io/gateway-api | v1.4.0 | The Gateway API CRD types, clientset and informers. The four Gateway API menus are the only kinds this app does not get from client-go |
 | Node | v22 via nvm | Frontend deps live in `frontend/` |
 | React | 19 | Function components only |
 | React Router | v7 (`react-router-dom`) | `HashRouter`, so every menu has its own hash route and the desktop build needs no server rewrites |
@@ -38,6 +40,11 @@ has typed the confirmation word and the namespace name back.
 | CodeMirror | v6 + `@codemirror/lang-yaml` | Powers the read-only pod YAML drawer; adds ~300 kB to the bundle |
 
 ## Commands
+
+**Do not run builds, tests or any other Go/Wails command yourself.** `go build`, `go test`,
+`go vet`, `gofmt`, `go mod tidy`, `wails build` and `wails dev` all belong to the user, who runs
+them and reports the result back. Write and edit the code, then hand off with the exact commands
+to run instead of running them.
 
 Wails and Go commands run from the **repository root**; npm commands run from `frontend/`.
 
@@ -85,6 +92,17 @@ statefulsets.go StatefulSetInfo / WatchStatefulSets
 services.go    ServiceInfo / WatchServices
                                 kubectl NAME / TYPE / CLUSTER-IP / EXTERNAL-IP / PORT(S)
                                 / AGE columns
+gatewayapi.go  conditionStatus / joinOrNone / gatewayAddresses / routeHostnames /
+               gatewayAPIError  the helpers and the missing-CRD message the four
+                                Gateway API kinds share
+gatewayclasses.go GatewayClassInfo / WatchGatewayClasses
+                                cluster scoped; kubectl NAME / CONTROLLER / ACCEPTED / AGE
+gateways.go    GatewayInfo / WatchGateways
+                                NAMESPACE / NAME / CLASS / ADDRESS / PROGRAMMED / AGE
+httproutes.go  HTTPRouteInfo / WatchHTTPRoutes
+                                NAMESPACE / NAME / HOSTNAMES / AGE
+grpcroutes.go  GRPCRouteInfo / WatchGRPCRoutes
+                                the same columns as HTTPRoute
 metrics.go     PodUsage / NodeUsage / PodUsages, NodeUsages
                                 CPU and memory from metrics.k8s.io, formatted the way
                                 kubectl top prints them; one request, no polling
@@ -93,8 +111,8 @@ apply.go       ApplyResult / ApplyYAML
 terminal.go    TerminalRequest / PodContainers / ResolveContainer / ExecTerminal
                                 one interactive session: the exec URL, the WebSocket
                                 executor with SPDY behind it, and the size queue
-watch.go       Resource         the six watched kinds, plumbing only:
-                                watchInformer[T], sort helpers, replicaCount
+watch.go       Resource         the watched kinds, plumbing only: watchInformer[T],
+                                factoryStarter, sort helpers, replicaCount
 
 main  (Wails adapter)
 ─────────────────────────────────────────────────────────────────────────────
@@ -109,7 +127,8 @@ frontend/src/routes.ts        route path/label/subtitle per menu; no cluster kin
 frontend/src/app-context.tsx  AppContext: AppState plus busy/error/run/reload
 frontend/src/use-resource.ts  per-page hook that starts the kind the page streams
 frontend/src/pages            one page per menu: pods, deployments, statefulsets,
-                              nodes, namespaces, services, manifest-yaml, settings
+                              nodes, namespaces, services, gateway-classes, gateways,
+                              http-routes, grpc-routes, manifest-yaml, settings
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
 frontend/src/use-terminal.ts  the pod terminal's xterm instance and WebSocket
 frontend/src/components/
@@ -121,7 +140,7 @@ frontend/src/components/
   yaml-style.ts               shared monochrome CodeMirror theme and highlight
   yaml-viewer.tsx             read-only CodeMirror YAML viewer
   yaml-editor.tsx             editable CodeMirror YAML editor
-  pod-yaml-drawer.tsx         drawer that fetches one pod via GetPodYAML
+  yaml-drawer.tsx             the one YAML drawer; takes a noun and a per-kind fetcher
   delete-namespace-dialog.tsx two-input confirmation, then DeleteNamespace
   ui/                         shadcn components (table, sidebar, button, ...)
 ```
@@ -131,19 +150,49 @@ frontend/src/components/
 - `internal/kube` is decoupled from Wails: each `WatchX` takes a `func([]X)` callback, so the
   whole cluster layer can be exercised by unit tests without a running app.
 - **One resource kind per file**, and a watcher streams exactly one kind: `WatchNodes`,
-  `WatchNamespaces`, `WatchPods`, `WatchDeployments`, `WatchStatefulSets` and `WatchServices`
+  `WatchNamespaces`, `WatchPods`, `WatchDeployments`, `WatchStatefulSets`, `WatchServices` and the
+  four Gateway API watchers
   each build their
   own single-informer factory. The shared informer, flush and ticker plumbing lives once in
-  `watchInformer[T]` (`watch.go`), which is the only generic code in the package.
-- **Nodes and namespaces are cluster scoped**, which shows up in three places: the probe and
-  informer take no namespace, `sortByName` replaces the namespace-then-name sort, and the
-  accessors (`NODE_ACCESSORS` in `src/pages/nodes.tsx`, `NAMESPACE_ACCESSORS` in
-  `src/pages/namespaces.tsx`) omit `namespace`, so the table hides the namespace filter and
+  `watchInformer[T]` (`watch.go`), which is the only generic code in the package. Its `factory`
+  parameter is the one-method `factoryStarter` interface rather than a concrete factory type,
+  because the Gateway API factory is a different interface that shares only `Start`.
+- **Gateway API is a set of CRDs, so it is the one kind group that does not come from client-go.**
+  The typed types, clientset and informers come from the `sigs.k8s.io/gateway-api` module, which
+  is why `GatewayClientFor` (`kubeconfig.go`) sits beside `ClientFor` and `watchGatewayAPI`
+  (`app.go`) builds that client instead of the core one. A single `GatewayV1()` clientset serves
+  all four kinds: typed `List` probes, typed informers through `factory.Gateway().V1()`, and typed
+  field reads, so each file has the shape of `services.go` and the tables are built from
+  `GatewayClass.Spec.ControllerName`, `Gateway.Spec.GatewayClassName`,
+  `Gateway.Status.Addresses`, `HTTPRoute.Spec.Hostnames` and `GRPCRoute.Spec.Hostnames`.
+- The four Gateway API columns are ports of the CRDs' own `additionalPrinterColumns`, which is
+  why addresses and hostnames join the list **in stored order** rather than sorting it: the API
+  server renders those jsonPaths as-is, unlike the service load balancer addresses that
+  `services.go` does sort. ACCEPTED and PROGRAMMED come from `status.conditions`, and a kind whose
+  controller has not been reconciled yet has no such condition at all, which reads as `<none>`.
+- **The two route tables add one column kubectl has not got: PARENT REFS.** It comes from
+  `spec.parentRefs` through `routeParentRefs`, which resolves a reference without a namespace to
+  the route's own namespace and keeps a listener section when one is named. That resolution is what
+  makes the value usable as a Group By key: a bare name would otherwise put every namespace's
+  `my-gateway` into one bucket.
+- **A cluster without the CRDs is the expected case, not a fault in the request.** The probe turns
+  the API server's 404 into "the Gateway API CRDs are not installed" (`gatewayAPIError`), because
+  "the server could not find the requested resource" never says Gateway API. The four menu entries
+  are always listed, and each page reports that message with its own Retry.
+- **Nodes, namespaces and gateway classes are cluster scoped**, which shows up in three places:
+  the probe and informer take no namespace, `sortByName` replaces the namespace-then-name sort, and
+  the accessors (`NODE_ACCESSORS` in `src/pages/nodes.tsx`, `NAMESPACE_ACCESSORS` in
+  `src/pages/namespaces.tsx`, `GATEWAY_CLASS_ACCESSORS` in `src/pages/gateway-classes.tsx`) omit
+  `namespace`, so the table hides the namespace filter and
   grouping.
 - `PodYAML` renders one pod as YAML for the drawer. Like `ApplyYAML`, it is not part of a watch,
   so `GetPodYAML` builds a short-lived client instead of reusing the active one, and it sets
   `apiVersion`/`kind` by hand (the typed client leaves them empty) and clears `managedFields`
   the way kubectl does by default.
+- The Gateway API kinds get the same treatment, one `GatewayClassYAML`, `GatewayYAML`,
+  `HTTPRouteYAML` and `GRPCRouteYAML` per kind file, all mirroring `PodYAML` down to the hand-set
+  `apiVersion` (from `gatewayAPIGroupVersion`) and the dropped `managedFields`. `App.gatewayClient`
+  is what builds the client for those four on-demand reads.
 - `ApplyYAML` in `apply.go` is the write path for creating and updating. It decodes one YAML or
   JSON document into an `unstructured.Unstructured`, resolves the kind through discovery and
   `restmapper` so any kind
@@ -222,11 +271,13 @@ frontend/src/components/
 
 `GetState`, `SelectResource`, `PickKubeconfig` and `ResetKubeconfig` all return the same
 `AppState`; `GetPodYAML`, `GetPodContainers`, `OpenTerminal`, `ApplyYAML`, `DeleteNamespace`,
-`GetPodUsages` and `GetNodeUsages` are
+`GetPodUsages`, `GetNodeUsages` and the four Gateway API YAML readers (`GetGatewayClassYAML`,
+`GetGatewayYAML`, `GetHTTPRouteYAML`, `GetGRPCRouteYAML`) are
 the on-demand requests
 outside the watch and return their own types, and each of them reports its own failure to the
 page that asked instead of through `AppState`. `AppState` carries the config plus one state object per resource
-(`nodes`, `namespaces`, `pods`, `deployments`, `statefulSets`, `services`), each holding `items`,
+(`nodes`, `namespaces`, `pods`, `deployments`, `statefulSets`, `services`, `gatewayClasses`,
+`gateways`, `httpRoutes`, `grpcRoutes`), each holding `items`,
 `loaded`,
 `loading`, `error` and `updatedAt`, so the frontend renders loading and failure per menu without
 guessing; CPU and memory are deliberately absent from it, because they belong to whoever polls
@@ -264,6 +315,21 @@ is the whole discriminator. Nothing about a session reaches `AppState` or `state
   instead (see `probeTimeout`).
 - **client-go is pinned to v0.35.4.** v0.36.2 and v0.37.0 declare `go 1.26.0`, which would
   bump the `go` directive in `go.mod`. v0.35.4 declares `go 1.25.0`.
+- **gateway-api is pinned to a release, never to `main`.** `sigs.k8s.io/gateway-api` `main`
+  declares `go 1.26.0`, which would bump the `go` directive and need a newer toolchain, while every
+  release up to v1.4.0 declares `go 1.24.0` or lower. v1.4.0 therefore keeps `go 1.25.0` intact,
+  and it requires client-go v0.34.1, which is below this app's v0.35.4 pin, so MVS keeps ours. The
+  module is not in the local module cache, so the first `go mod tidy` after a change here needs
+  network.
+- **The four Gateway API menus target `v1` only.** GatewayClass, Gateway and HTTPRoute have been
+  served as `v1` since Gateway API v1.0.0, but GRPCRoute only since v1.2.0, so an older install
+  reports the not-installed message for that one kind instead of the app falling back to
+  `v1beta1`. The typed clientset does expose `GatewayV1beta1()`, which is the hook for adding that
+  fallback if it is ever wanted.
+- **The Gateway API kinds need a second clientset, so `streamResource` builds one for them.** The
+  core client is still built at the top of that function and goes unused on the gateway path,
+  which costs one kubeconfig read per menu open and is deliberate: it keeps the six existing kinds
+  on exactly the code path they had.
 - Adding client-go required network access for a few transitive modules that were missing
   from the local module cache; expect the first `go mod tidy` after a dependency change to
   download.
@@ -309,6 +375,16 @@ is the whole discriminator. Nothing about a session reaches `AppState` or `state
   `HashRouter` and drives the sidebar through `react-router-dom` links, and every page under
   `src/pages` is a separate component. `HashRouter` rather than `BrowserRouter` is deliberate:
   the desktop build serves the frontend with no server that could answer a path-based route.
+- **The Gateway API children are a collapsible submenu, not four more sidebar groups.**
+  `MENU_GROUPS` in `App.tsx` holds `MenuEntry` values, which are either a leaf `{ view }` or a
+  `{ label, icon, views }` submenu, and a submenu renders through the `SidebarMenuSub` primitives
+  with a `defaultOpen` computed from the route on screen, so landing on a child never hides the
+  link that is active. `Collapsible` comes from the already-installed unified `radix-ui` package
+  (`ui/collapsible.tsx`), so no npm dependency was added. The children deliberately carry no icon,
+  which is why `VIEW_ICONS` is a `Partial<Record<View, …>>`: a full record would have forced four
+  invented icons for indented rows.
+- **The gRPC route menu is labelled `GRPCRoute`**, the kubectl kind name, matching the other three
+  rather than the "gRPC Route" prose spelling.
 - **A page starts its own watch through `useResource` (`src/use-resource.ts`), so `App.tsx`
   never names a resource.** The hook calls `SelectResource` when the page mounts and keeps the
   ref guard that stops StrictMode's double mount from cancelling and restarting the same watch.
@@ -317,16 +393,17 @@ is the whole discriminator. Nothing about a session reaches `AppState` or `state
   shared `AppState` from `AppContext`; Settings streams nothing and uses `useApp` directly.
   Go's `startup` still warms the pods watch, so the first route usually renders rows before the
   webview paints, at the cost of one extra list when the pods page reconnects it.
-- **The payload deliberately avoids generics.** `PodsState`, `DeploymentsState` and
-  `StatefulSetsState` are three concrete structs with the same shape because the Wails binding
-  generator cannot name a generic instantiation. The generic `resourceHolder[T]` and
+- **The payload deliberately avoids generics.** Every kind's state is its own concrete struct with
+the same shape (`PodsState`, `ServicesState`, `GatewayClassesState`, …) because the Wails binding
+generator cannot name a generic instantiation. The generic `resourceHolder[T]` and
   `publishResource[T]`/`failResource[T]` helpers live on the Go side only, and `publishResource`
   is a free function because Go methods cannot take type parameters.
 - **Every table's filter and Group By are client side.** The shared `ResourceTable` in
   `components/resource-table.tsx` filters and buckets the in-memory rows and never asks the
   backend, so changing a filter cannot trigger cluster requests. Each page mounts its own
   `ResourceTable`, so switching sidebar entries starts from an unfiltered table, and a kind whose
-  accessors omit `namespace` (nodes, namespaces) renders no namespace filter or namespace
+  accessors omit `namespace` (nodes, namespaces, gateway classes) renders no namespace filter or
+  namespace
   grouping at all. Grouping renders
   an extra `TableRow` whose `colSpan` follows the column count plus the optional selection and
   actions cells.
@@ -375,11 +452,14 @@ is the whole discriminator. Nothing about a session reaches `AppState` or `state
   rest of the queue, and the dialog reports a rejected delete in line instead of through the
   shared error banner. Deleting does not refresh the list: the watch delivers the namespace as
   Terminating and then as gone.
-- **The pod YAML drawer lives outside the watch.** `PodYamlDrawer
-  (frontend/src/components/pod-yaml-drawer.tsx)` takes a `target` and an `onClose` callback and
-  fetches by namespace/name through `GetPodYAML` itself, so it could be swapped for another
-  kind's YAML; today only the pod page mounts it. The row actions arrive through
-  `ResourceTable`'s optional `rowActions` prop, which also widens the group header `colSpan`.
+- **The YAML drawer lives outside the watch and serves every kind.** `YamlDrawer
+  (frontend/src/components/yaml-drawer.tsx)` takes a `target`, a `noun` and a `fetchYaml` callback,
+  and only the name has to be set, so a cluster-scoped kind hands over an empty namespace and the
+  description drops it. The fetcher is a prop because the drawer is shared, so pages pass a
+  module-level function (or a binding directly) and its identity stays stable across renders: an
+  inline arrow would re-run the effect and refetch on every render. The row actions arrive through
+  `ResourceTable`'s optional `rowActions` prop, which also widens the group header `colSpan`, and
+  each page builds its own dropdown in the page, the way the pods table does.
 - **The terminal's WebSocket cannot be served by the Wails asset server**, so it is a separate
   loopback listener. Two things are worth knowing before debugging one that will not open: the
   page must be allowed to reach `ws://127.0.0.1` (loopback is normally exempt from ATS, but a
@@ -543,6 +623,18 @@ is the whole discriminator. Nothing about a session reaches `AppState` or `state
   server, so the endpoint, the decode and the error wording are all exercised without a cluster:
   a 404 reports which column failed and a malformed body is an error too. There is nothing here
   about an interval, because the package no longer owns one.
+- `gatewayapi_test.go` covers the helpers the four Gateway API kinds share: reading a condition by
+  type (True, False, Unknown, the requested condition absent, and no conditions at all), the
+  `<none>` placeholder for an empty address or hostname list, addresses and hostnames keeping
+  their stored order, and the 404 mapping that turns a missing CRD into the not-installed message
+  while letting every other error through untouched. It also covers `routeParentRefs`: a bare name
+  resolving to the route's own namespace, an explicit namespace winning, a listener section being
+  kept, and several references keeping their order.
+- `gatewayclasses_test.go`, `gateways_test.go`, `httproutes_test.go` and `grpcroutes_test.go`
+  cover each kind's flattening and store sorting: the gateway class CONTROLLER and ACCEPTED
+  columns, the gateway CLASS/ADDRESS/PROGRAMMED columns including the placeholders for a gateway
+  that has not been programmed yet, the hostnames and resolved parent references of both route
+  kinds, and the cluster-scoped name sort against the namespace-then-name sort.
 - `terminal_test.go` covers the terminal's own logic: the container defaulting (an empty request
   takes the first container, and a name the pod does not declare is refused by a message that
   names it), the shell that fills in for a missing command, and the size queue (the size the

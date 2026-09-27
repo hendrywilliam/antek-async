@@ -150,8 +150,9 @@ type App struct {
 	httpRoutes     resourceHolder[kube.HTTPRouteInfo]
 	grpcRoutes     resourceHolder[kube.GRPCRouteInfo]
 
-	// terminals serves the interactive sessions. It is outside the state above because a
-	// terminal is not a list: it is a live connection the drawer owns until it closes.
+	// terminals serves the long-lived pod sessions, a terminal or a followed log. It is outside
+	// the state above because a session is not a list: it is a live connection the drawer owns
+	// until it closes.
 	terminals *terminalServer
 }
 
@@ -176,7 +177,7 @@ func (a *App) startup(ctx context.Context) {
 	a.startWatch(kube.ResourcePods)
 }
 
-// shutdown stops the running watcher and every open terminal. The startup context is never
+// shutdown stops the running watcher and every open pod session. The startup context is never
 // cancelled by Wails, so both have to be stopped here.
 func (a *App) shutdown(context.Context) {
 	a.mu.Lock()
@@ -240,8 +241,9 @@ func (a *App) PickKubeconfig() AppState {
 	active := a.active
 	a.mu.Unlock()
 
-	// A shell belongs to the cluster it was started on, so the switch ends every session. It is
-	// done outside the lock because closing a session reaches into the terminal server.
+	// A session, a shell or a log, belongs to the cluster it was started on, so the switch ends
+	// every one. It is done outside the lock because closing a session reaches into the terminal
+	// server.
 	a.terminals.closeSessions()
 
 	a.startWatch(active)
@@ -372,6 +374,18 @@ func (a *App) OpenTerminal(request kube.TerminalRequest) (TerminalEndpoint, erro
 	a.mu.RUnlock()
 
 	return a.terminals.prepare(a.ctx, path, request)
+}
+
+// OpenPodLogs validates a log request and returns the one-time endpoint that streams it. It shares
+// the terminal's transport and tickets, so the same rules hold: nothing is read from the cluster
+// until the viewer connects to the endpoint, and the kubeconfig is read per call so the stream
+// stays on the cluster it was prepared against rather than a later switch.
+func (a *App) OpenPodLogs(request kube.LogRequest) (TerminalEndpoint, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	return a.terminals.prepareLogs(a.ctx, path, request)
 }
 
 // ApplyYAML sends one manifest to the active cluster with server-side apply, so the editor can

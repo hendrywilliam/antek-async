@@ -10,6 +10,7 @@ import {
 	NO_GROUPING,
 	ResourceTable,
 } from "@/components/resource-table";
+import { LogDrawer } from "@/components/log-drawer";
 import { StatusLabel } from "@/components/status-label";
 import { TerminalDrawer } from "@/components/terminal-drawer";
 import { UsageCell } from "@/components/usage-cell";
@@ -75,6 +76,10 @@ export function PodsPage() {
 		namespace: string;
 		name: string;
 	} | null>(null);
+	const [logTarget, setLogTarget] = useState<{
+		namespace: string;
+		name: string;
+	} | null>(null);
 
 	const podRowActions = useCallback(
 		(pod: kube.PodInfo) => (
@@ -89,10 +94,11 @@ export function PodsPage() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
-					{/* A pod offers one drawer at a time, so each action closes the other. */}
+					{/* A pod offers one drawer at a time, so each action closes the others. */}
 					<DropdownMenuItem
 						onSelect={() => {
 							setYamlTarget(null);
+							setLogTarget(null);
 							setTerminalTarget({
 								namespace: pod.namespace,
 								name: pod.name,
@@ -104,6 +110,16 @@ export function PodsPage() {
 					<DropdownMenuItem
 						onSelect={() => {
 							setTerminalTarget(null);
+							setYamlTarget(null);
+							setLogTarget({ namespace: pod.namespace, name: pod.name });
+						}}
+					>
+						View Log
+					</DropdownMenuItem>
+					<DropdownMenuItem
+						onSelect={() => {
+							setTerminalTarget(null);
+							setLogTarget(null);
 							setYamlTarget({ namespace: pod.namespace, name: pod.name });
 						}}
 					>
@@ -219,6 +235,7 @@ export function PodsPage() {
 				onClose={() => setTerminalTarget(null)}
 				target={terminalTarget}
 			/>
+			<LogDrawer onClose={() => setLogTarget(null)} target={logTarget} />
 		</>
 	);
 }

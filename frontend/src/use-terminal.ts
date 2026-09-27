@@ -1,41 +1,7 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useState } from "react";
 import { OpenTerminal } from "../wailsjs/go/main/App";
 import { kube } from "../wailsjs/go/models";
-
-// The app is black, white and grey, and the terminal keeps that rule rather than letting a shell
-// paint its own colours into the window. The ANSI entries are therefore a grey ramp; the literals
-// are used instead of the oklch() tokens in style.css because xterm's colour parser cannot read
-// those.
-const TERMINAL_THEME = {
-	background: "#000000",
-	foreground: "#ffffff",
-	cursor: "#ffffff",
-	cursorAccent: "#000000",
-	selectionBackground: "#3f3f46",
-	black: "#27272a",
-	red: "#a1a1aa",
-	green: "#d4d4d8",
-	yellow: "#e4e4e7",
-	blue: "#d4d4d8",
-	magenta: "#a1a1aa",
-	cyan: "#d4d4d8",
-	white: "#e4e4e7",
-	brightBlack: "#71717a",
-	brightRed: "#d4d4d8",
-	brightGreen: "#e4e4e7",
-	brightYellow: "#f4f4f5",
-	brightBlue: "#e4e4e7",
-	brightMagenta: "#d4d4d8",
-	brightCyan: "#e4e4e7",
-	brightWhite: "#ffffff",
-};
-
-// The mono font is bundled with the app the same way Inter is, so a terminal never depends on
-// what the machine happens to have installed.
-const TERMINAL_FONT =
-	'"JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+import { createTerminal } from "@/terminal-theme";
 
 // A terminal that has not been measured yet still has to name a size, because the API server
 // allocates the PTY before the socket can report a resize.
@@ -64,7 +30,7 @@ export type TerminalTarget = {
 	container: string;
 };
 
-function parseControl(payload: string): TerminalControl | null {
+export function parseControl(payload: string): TerminalControl | null {
 	try {
 		return JSON.parse(payload) as TerminalControl;
 	} catch {
@@ -102,15 +68,7 @@ export function useTerminal(
 		// The previous session's terminal can still be in the element when the container changes.
 		host.replaceChildren();
 
-		const term = new Terminal({
-			cursorBlink: true,
-			fontFamily: TERMINAL_FONT,
-			fontSize: 13,
-			scrollback: 5000,
-			theme: TERMINAL_THEME,
-		});
-		const fit = new FitAddon();
-		term.loadAddon(fit);
+		const { term, fit } = createTerminal("terminal");
 		term.open(host);
 
 		setStatus("connecting");

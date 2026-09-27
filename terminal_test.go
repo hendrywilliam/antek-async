@@ -190,6 +190,70 @@ func TestTerminalSessionReportsTheExitCode(t *testing.T) {
 	}
 }
 
+func TestLogSessionStreamsAndExits(t *testing.T) {
+	server := newTerminalServer()
+	defer server.close()
+
+	// A log stream writes one way: the runner only ever touches stdout, and it ends by returning.
+	server.logRun = func(ctx context.Context, path string, request kube.LogRequest, streams kube.TermStreams) error {
+		if path != "/tmp/kubeconfig" {
+			t.Errorf("session ran against %q, want the kubeconfig the ticket captured", path)
+		}
+		if request.Namespace != "default" || request.Pod != "web-0" || request.Container != "app" {
+			t.Errorf("session ran with %+v, want the ticket's request", request)
+		}
+		if !request.Follow || request.TailLines != 200 {
+			t.Errorf("session ran with %+v, want follow with a 200 line tail", request)
+		}
+
+		_, err := streams.Stdout.Write([]byte("hello\nworld\n"))
+		return err
+	}
+
+	endpoint, err := server.ensure()
+	if err != nil {
+		t.Fatalf("cannot start the terminal listener: %v", err)
+	}
+
+	token, err := server.issueLogs("/tmp/kubeconfig", kube.LogRequest{
+		Namespace: "default",
+		Pod:       "web-0",
+		Container: "app",
+		Follow:    true,
+		TailLines: 200,
+	}, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("cannot issue a log ticket: %v", err)
+	}
+
+	conn, response, err := websocket.DefaultDialer.Dial(endpoint+"?id="+token, nil)
+	if err != nil {
+		t.Fatalf("cannot connect to the log endpoint: %v", err)
+	}
+	if response != nil {
+		response.Body.Close()
+	}
+	defer conn.Close()
+
+	if ready := readTerminalText(t, conn); ready.Type != "ready" {
+		t.Fatalf("first message = %+v, want a ready message", ready)
+	}
+
+	messageType, payload := readTerminalFrame(t, conn)
+	if messageType != websocket.BinaryMessage {
+		t.Fatalf("output arrived as frame type %d, want binary", messageType)
+	}
+	if string(payload) != "hello\nworld\n" {
+		t.Errorf("output = %q, want the stream the runner wrote", payload)
+	}
+
+	// A stream that ends on its own reports a clean exit, so the viewer knows it was not cut off.
+	exit := readTerminalText(t, conn)
+	if exit.Type != "exit" || exit.Code != 0 || exit.Reason != "" {
+		t.Errorf("exit = %+v, want a clean exit", exit)
+	}
+}
+
 // terminalTestClient prepares a session on the test server and connects to it, so a test holds
 // the socket the drawer would have held.
 func terminalTestClient(t *testing.T, server *terminalServer) *websocket.Conn {

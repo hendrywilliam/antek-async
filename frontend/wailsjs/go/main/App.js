@@ -46,6 +46,10 @@ export function GetState() {
   return window['go']['main']['App']['GetState']();
 }
 
+export function OpenPodLogs(arg1) {
+  return window['go']['main']['App']['OpenPodLogs'](arg1);
+}
+
 export function OpenTerminal(arg1) {
   return window['go']['main']['App']['OpenTerminal'](arg1);
 }

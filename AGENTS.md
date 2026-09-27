@@ -6,15 +6,15 @@
 Deployments, StatefulSets, Services and the four Gateway API kinds (GatewayClass, Gateway,
 HTTPRoute and GRPCRoute). Pods, the workload controllers, services and the namespaced Gateway API
 kinds span **all namespaces**; nodes, namespaces and gateway classes are cluster scoped. It is
-deliberately small: no resource detail, no logs, no
-multi-cluster switching, and
-every list is filtered and grouped on the client. Each menu is fetched from the cluster **only
+deliberately small: no resource detail, no multi-cluster switching, and every list is filtered
+and grouped on the client. Each menu is fetched from the cluster **only
 when it is opened**, so nothing is listed or watched in the background. The pod and node rows
 also carry CPU and memory, which come from metrics-server and are read by the page that shows
 them every five seconds while that page is open, because that API cannot be watched and has
-nothing to push. Four things step outside
+nothing to push. Five things step outside
 those lists: each table's actions dropdown opens a read-only YAML view of its row in a CodeMirror
-drawer, and a pod's also opens an interactive **Terminal** in one of its containers, the
+drawer, and a pod's also opens an interactive **Terminal** in one of its containers and a
+**View Log** that streams the pod's log into a read-only xterm viewer, the
 **Manifest YAML** menu writes, sending one hand-written manifest to the cluster with server-side
 apply, and the **Namespaces** menu deletes a namespace once the user has typed the confirmation
 word and the namespace name back.
@@ -70,6 +70,22 @@ npm run build                    # tsc && vite build
 cd frontend && npx tsc --noEmit  # type-check alone; there is no lint script
 ```
 
+### CI
+
+`.github/workflows/build.yml` builds both targets on native runners rather than
+cross-compiling (Wails refuses to cross-compile Linux or macOS anyway): `ubuntu-24.04` for
+Linux, `windows-latest` for Windows, each uploading its binary as an artifact, and a
+tag-triggered job attaching both to the GitHub release. Two Wails details shape it. Ubuntu
+24.04 ships webkit2gtk-4.1 and no 4.0, so the Linux leg passes `-tags webkit2_41` to **both**
+`wails build` and `go test`, because compiling `main` needs those headers either way. And the
+tests run in the same leg *after* the build, because `main.go` embeds `all:frontend/dist` and
+only `wails build` populates it. The repository also ships no `build/` directory: `wails build`
+writes the missing app icon, manifest and installer files from the embedded Wails defaults, and
+it runs `npm install` whenever `frontend/node_modules` is absent, so neither is a CI
+prerequisite. There is no `frontend/package-lock.json`, so CI's install resolves fresh
+versions; committing one and switching `frontend:install` to `npm ci` is what would make the
+builds reproducible.
+
 ## Architecture
 
 ```
@@ -111,6 +127,8 @@ apply.go       ApplyResult / ApplyYAML
 terminal.go    TerminalRequest / PodContainers / ResolveContainer / ExecTerminal
                                 one interactive session: the exec URL, the WebSocket
                                 executor with SPDY behind it, and the size queue
+logs.go        LogRequest / PodLogs / StreamPodLogs
+                                one followed log stream, read straight from pods/log
 watch.go       Resource         the watched kinds, plumbing only: watchInformer[T],
                                 factoryStarter, sort helpers, replicaCount
 
@@ -118,8 +136,9 @@ main  (Wails adapter)
 ─────────────────────────────────────────────────────────────────────────────
 app.go   AppState + App      bound methods, per-resource state, watch lifecycle
          resourceHolder[T]  one per kind; only the open menu is streamed
-terminal.go terminalServer   the local WebSocket listener the terminal needs,
-         terminalSession    the one-time tickets, and the frame protocol
+terminal.go terminalServer   the local WebSocket listener the pod sessions need,
+         terminalSession    the one-time tickets, and the frame protocol shared by
+                            the terminal and the log viewer
 main.go  wails.Run, Bind, OnStartup/OnShutdown
 frontend/src/App.tsx          HashRouter shell: sidebar links, header, error banner
                               and Routes
@@ -131,12 +150,15 @@ frontend/src/pages            one page per menu: pods, deployments, statefulsets
                               http-routes, grpc-routes, manifest-yaml, settings
 frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
 frontend/src/use-terminal.ts  the pod terminal's xterm instance and WebSocket
+frontend/src/use-log-stream.ts the pod log viewer's read-only xterm instance and WebSocket
+frontend/src/terminal-theme.ts the xterm theme, font and factory the two session hooks share
 frontend/src/components/
   resource-table.tsx          generic table with filter/Group By on the client
   status-label.tsx            StatusLabel/NodeStatusLabel/NamespaceStatusLabel, the
                               only colour in the UI
   usage-cell.tsx              CPU and memory stacked in one cell, CPU on top
   terminal-drawer.tsx         drawer with the container picker that hosts the terminal
+  log-drawer.tsx              read-only drawer that hosts the pod log viewer
   yaml-style.ts               shared monochrome CodeMirror theme and highlight
   yaml-viewer.tsx             read-only CodeMirror YAML viewer
   yaml-editor.tsx             editable CodeMirror YAML editor
@@ -203,8 +225,9 @@ frontend/src/components/
   namespace that takes time to go drains in the watch as Terminating before it disappears. The
   name is what the frontend makes the user type back before the call is sent; the backend only
   refuses an empty one.
-- **The pod terminal is the only interactive, long-lived connection in the app.** `ExecTerminal`
-  in `terminal.go` runs `exec` (not `attach`) in one container with a TTY, so it works on any pod
+- **A pod session is the only long-lived connection in the app: a terminal or a followed log.**
+  `ExecTerminal` in `terminal.go` runs `exec` (not `attach`) in one container with a TTY, so it
+  works on any pod
   whose image carries a shell; `/bin/sh` is the default because it is the one shell every
   non-distroless image has. It builds the executor `kubectl exec` builds, a WebSocket upgrade
   with the SPDY protocol behind it, and only an upgrade failure falls back, so an error from
@@ -222,6 +245,16 @@ frontend/src/components/
   is open, so its session is bounded by its context alone; `rest.Config.Timeout` is left unset the
   way `RestConfigFor` leaves it. `PodContainers`, being one bounded read, does use
   `requestTimeout` like `PodYAML`.
+- **The pod log viewer reuses the terminal's transport and tickets, but not its runner.**
+  `logs.go` streams `pods/log` with `follow` and a bounded `TailLines`, and `podLogOptions`
+  leaves a zero tail as nil because the API server reads a missing value as the whole log and an
+  explicit zero as no lines. Like `ExecTerminal` it takes the kubeconfig path and leaves
+  `rest.Config.Timeout` unset, so a followed log lives until the viewer closes rather than for one
+  interval. The read is one direction, so nothing on the log path uses stdin or the size queue.
+- The log viewer streams the pod's **first container for now**: `prepareLogs` resolves the
+  container with the same `ResolveContainer` a terminal uses, which is what lets a pod with
+  sidecars stream at all instead of failing on the wire, and the resolved name comes back in the
+  endpoint so the drawer can show it.
 - `Resolve` reads the environment and cwd, then delegates to `resolveKubeconfig`, which takes
   all four inputs as arguments. That split is what makes the precedence testable.
 - `Resolve` picks exactly **one** kubeconfig file (no merging), so a project config never
@@ -270,7 +303,8 @@ frontend/src/components/
 ### Backend to frontend contract
 
 `GetState`, `SelectResource`, `PickKubeconfig` and `ResetKubeconfig` all return the same
-`AppState`; `GetPodYAML`, `GetPodContainers`, `OpenTerminal`, `ApplyYAML`, `DeleteNamespace`,
+`AppState`; `GetPodYAML`, `GetPodContainers`, `OpenTerminal`, `OpenPodLogs`, `ApplyYAML`,
+`DeleteNamespace`,
 `GetPodUsages`, `GetNodeUsages` and the four Gateway API YAML readers (`GetGatewayClassYAML`,
 `GetGatewayYAML`, `GetHTTPRouteYAML`, `GetGRPCRouteYAML`) are
 the on-demand requests
@@ -286,14 +320,16 @@ also pushed on the `state:update` event with an identical
 payload, so the frontend has one reducer and never merges racing updates. The frontend calls
 `GetState` on mount because events emitted before it subscribed are lost.
 
-The terminal is the one request that is not a single call. `GetPodContainers` and `OpenTerminal`
-are bound methods like the rest, but `OpenTerminal` only validates the request against the pod
-and returns a one-time endpoint; the session itself is a WebSocket at that endpoint, with a small
-protocol of its own. Output and typed input travel as **binary** frames, because a read can split
-a multi-byte character and only raw bytes survive that intact. The two control messages the
-drawer sends (a resize, and a request to end the session) and the two it receives (`ready`, then
-`exit` with a code and the cluster's own message) are JSON in **text** frames, so the frame type
-is the whole discriminator. Nothing about a session reaches `AppState` or `state:update`.
+A pod session is the one request that is not a single call. `GetPodContainers`, `OpenTerminal` and
+`OpenPodLogs` are bound methods like the rest, but `OpenTerminal` and `OpenPodLogs` only validate
+the request against the pod and return a one-time endpoint; the session itself is a WebSocket at
+that endpoint, with a small protocol of its own. Output and typed input travel as **binary**
+frames, because a read can split a multi-byte character and only raw bytes survive that intact.
+The control messages the drawer sends (a resize, and a request to end the session) and the two it
+receives (`ready`, then `exit` with a code and the cluster's own message) are JSON in **text**
+frames, so the frame type is the whole discriminator. A log viewer sends neither a resize nor any
+input, but it speaks the same protocol. Nothing about a session reaches `AppState` or
+`state:update`.
 
 ## Gotchas
 
@@ -469,17 +505,30 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
 - **The terminal drawer's host element is state, not a ref object.** `useTerminal` takes the
   element itself, and the drawer hands it over through `ref={setHost}`, so the hook re-runs when
   the element appears. A `useRef` would be null on the first render, and the effect would return
-  early and never run again, which fails silently: the drawer opens on an empty box.
+  early and never run again, which fails silently: the drawer opens on an empty box. `LogDrawer`
+  and `useLogStream` repeat the pattern for the same reason.
 - **`ws.binaryType = "arraybuffer"` is required on the client.** Without it the browser hands back
   `Blob` objects, every chunk of output is dropped, and it looks like a terminal that connects and
   then does nothing.
 - **The xterm theme uses literal hex, not the `style.css` tokens**, because xterm's colour parser
-  cannot read `oklch()`. The app is dark only, so the terminal carries its own grey ramp, and the
-  ANSI entries are deliberately part of it: a shell's colours are flattened to greys to keep the
-  terminal inside the app's black, white and grey rule.
+  cannot read `oklch()`. It lives once in `terminal-theme.ts`, which both the terminal and the log
+  viewer build their emulator from, so the two cannot drift. The app is dark only, so the terminal
+  carries its own grey ramp, and the ANSI entries are deliberately part of it: a shell's colours
+  are flattened to greys to keep the terminal inside the app's black, white and grey rule.
+- **The log viewer sets `convertEol`, because a followed log has no PTY behind it.** A log line ends
+  in a bare LF, and xterm would only move the caret down a line and leave it in the same column,
+  which paints the log as a staircase; the LF-to-CRLF translation a PTY's termios normally does is
+  simply absent from a `pods/log` stream. `createTerminal("logs")` turns the LF into a CRLF, while
+  `createTerminal("terminal")` leaves it off because the shell behind the PTY already ends its
+  lines with CR.
 - **A session the user closed is not a failure.** The stream reports its context error as the
   session's result, so `terminalSession.end` reports a clean exit whenever the session's context is
   already done, and only carries an exit code or a reason otherwise.
+- **The loopback transport serves two session kinds, discriminated by the ticket.** `streamTerminal`
+  and `streamLogs` share the listener, the ticket store and the frame protocol, and `handle` picks
+  the runner from the ticket's `kind`, so `issue` and `issueLogs` store through one helper. A log
+  viewer is therefore closed by exactly the same paths as a terminal: its socket closing, a
+  kubeconfig switch and shutdown.
 - **gorilla/websocket is pinned by client-go, not by this app.** It is imported directly for the
   listener, but the version must stay `v1.5.4-0.20250319132907-e064f32e3674`, which is the one
   `client-go` v0.35.4 already resolves. Pulling in the exec and SPDY packages also added
@@ -641,12 +690,17 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   drawer already knows comes back from the first `Next` without waiting, a zero dimension is
   skipped rather than sent, and `Next` reports nil once the session ends so the stream's resize
   loop stops).
+- `logs_test.go` covers the log path: `podLogOptions` leaving a zero or negative tail as nil and
+  sending a positive one, and `PodLogs` against an `httptest` server, which pins the `pods/log`
+  path and the container/follow/tailLines query, proves the body is copied as-is, and checks that
+  a refused request names the pod.
 - `terminal_test.go` in `main` covers the transport with no cluster at all, because the cluster
-  side is a `terminalRunner` field. A fake runner that echoes stdin proves the frame protocol end
-  to end (a `ready` text frame first, binary input returning as binary output, a resize reaching
-  the session, and `close` ending it as a clean exit), a runner that returns an `ExitError` proves
-  the code survives to the client, and the ticket store is checked for single use, expiry and a
-  404 for an unknown id. `allowedTerminalOrigin` is a table test.
+  side is a `terminalRunner` field and the log side a `logRunner`. A fake runner that echoes stdin
+  proves the frame protocol end to end (a `ready` text frame first, binary input returning as
+  binary output, a resize reaching the session, and `close` ending it as a clean exit), a runner
+  that returns an `ExitError` proves the code survives to the client, a fake log runner proves a
+  followed log flows one way and ends with a clean exit, and the ticket store is checked for
+  single use, expiry and a 404 for an unknown id. `allowedTerminalOrigin` is a table test.
 
 There is no integration test infrastructure: `go test ./...` never talks to a cluster. A
 throwaway test was used once to confirm that each watcher probes, syncs and publishes against

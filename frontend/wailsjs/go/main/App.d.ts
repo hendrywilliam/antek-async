@@ -25,6 +25,8 @@ export function GetPodYAML(arg1:string,arg2:string):Promise<string>;
 
 export function GetState():Promise<main.AppState>;
 
+export function OpenPodLogs(arg1:kube.LogRequest):Promise<main.TerminalEndpoint>;
+
 export function OpenTerminal(arg1:kube.TerminalRequest):Promise<main.TerminalEndpoint>;
 
 export function PickKubeconfig():Promise<main.AppState>;

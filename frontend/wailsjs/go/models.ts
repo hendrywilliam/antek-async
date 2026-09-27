@@ -136,6 +136,26 @@ export namespace kube {
 	        this.age = source["age"];
 	    }
 	}
+	export class LogRequest {
+	    namespace: string;
+	    pod: string;
+	    container: string;
+	    follow: boolean;
+	    tailLines: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LogRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.pod = source["pod"];
+	        this.container = source["container"];
+	        this.follow = source["follow"];
+	        this.tailLines = source["tailLines"];
+	    }
+	}
 	export class NamespaceInfo {
 	    name: string;
 	    status: string;

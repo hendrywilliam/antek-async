@@ -55,12 +55,24 @@ type TerminalEndpoint struct {
 	Container string `json:"container"`
 }
 
+// streamKind is which runner a prepared session belongs to. A terminal and a followed log are the
+// same transport with a different runner, so a ticket carries the kind rather than a second
+// listener serving a second route.
+type streamKind int
+
+const (
+	streamTerminal streamKind = iota
+	streamLogs
+)
+
 // terminalTicket is one prepared session. The kubeconfig path is captured with it so a session
 // keeps the cluster it was started against even if the user switches kubeconfig while the drawer
-// is still connecting.
+// is still connecting. Exactly one of request and logs is set, chosen by kind.
 type terminalTicket struct {
 	path      string
+	kind      streamKind
 	request   kube.TerminalRequest
+	logs      kube.LogRequest
 	expiresAt time.Time
 }
 
@@ -85,14 +97,18 @@ type terminalInput struct {
 	Rows uint16 `json:"rows"`
 }
 
-// terminalRunner opens the cluster side of a session. It is a field rather than a direct call so
-// the frame protocol can be exercised by a test without a cluster.
+// terminalRunner and logRunner open the cluster side of a session. They are fields rather than
+// direct calls so the frame protocol can be exercised by a test without a cluster.
 type terminalRunner func(ctx context.Context, path string, request kube.TerminalRequest, streams kube.TermStreams) error
 
-// terminalServer serves the terminal WebSocket and owns its listener. The listener is created on
-// first use, so a user who never opens a terminal never has a port open.
+type logRunner func(ctx context.Context, path string, request kube.LogRequest, streams kube.TermStreams) error
+
+// terminalServer serves the pod sessions that need a WebSocket and owns its listener: an
+// interactive terminal and a followed log are the same transport with a different runner. The
+// listener is created on first use, so a user who never opens one never has a port open.
 type terminalServer struct {
-	run terminalRunner
+	run    terminalRunner
+	logRun logRunner
 
 	// ctx is the parent of every session, so close ends them all at once.
 	ctx    context.Context
@@ -114,6 +130,7 @@ func newTerminalServer() *terminalServer {
 
 	return &terminalServer{
 		run:      kube.ExecTerminal,
+		logRun:   kube.StreamPodLogs,
 		ctx:      ctx,
 		cancel:   cancel,
 		tickets:  map[string]terminalTicket{},
@@ -121,7 +138,7 @@ func newTerminalServer() *terminalServer {
 	}
 }
 
-// ensure starts the loopback listener the first time a terminal is asked for, and returns the
+// ensure starts the loopback listener the first time a session is asked for, and returns the
 // endpoint to connect to. Binding port 0 lets the kernel pick a free port, so two copies of the
 // app never collide.
 func (s *terminalServer) ensure() (string, error) {
@@ -202,10 +219,60 @@ func (s *terminalServer) prepare(ctx context.Context, path string, request kube.
 	return TerminalEndpoint{URL: endpoint + "?id=" + token, Container: container}, nil
 }
 
-// issue stores a prepared session under a fresh token. The token is what allows exactly one
-// connection: the listener is on loopback, but every local process can reach loopback, so without
-// it another program could run a shell in a pod using this app's credentials.
+// prepareLogs validates a log request and mints the one-time endpoint that streams it. It resolves
+// the container the same way a terminal does, so a pod with sidecars streams its first container
+// instead of failing on the wire, and the viewer learns which container answered.
+func (s *terminalServer) prepareLogs(ctx context.Context, path string, request kube.LogRequest) (TerminalEndpoint, error) {
+	if path == "" {
+		return TerminalEndpoint{}, errors.New("Kubeconfig not found")
+	}
+
+	if request.Namespace == "" || request.Pod == "" {
+		return TerminalEndpoint{}, errors.New("Namespace and pod are required")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return TerminalEndpoint{}, err
+	}
+
+	containers, err := kube.PodContainers(ctx, clientset, request.Namespace, request.Pod)
+	if err != nil {
+		return TerminalEndpoint{}, err
+	}
+
+	container, err := kube.ResolveContainer(containers, request.Container)
+	if err != nil {
+		return TerminalEndpoint{}, err
+	}
+	request.Container = container
+
+	endpoint, err := s.ensure()
+	if err != nil {
+		return TerminalEndpoint{}, err
+	}
+
+	token, err := s.issueLogs(path, request, time.Now().Add(terminalTicketTTL))
+	if err != nil {
+		return TerminalEndpoint{}, err
+	}
+
+	return TerminalEndpoint{URL: endpoint + "?id=" + token, Container: container}, nil
+}
+
+// issue and issueLogs prepare one session each and store it under a fresh token. The token is
+// what allows exactly one connection: the listener is on loopback, but every local process can
+// reach loopback, so without it another program could run a shell in a pod, or read its logs,
+// using this app's credentials.
 func (s *terminalServer) issue(path string, request kube.TerminalRequest, expiresAt time.Time) (string, error) {
+	return s.store(terminalTicket{path: path, kind: streamTerminal, request: request, expiresAt: expiresAt})
+}
+
+func (s *terminalServer) issueLogs(path string, request kube.LogRequest, expiresAt time.Time) (string, error) {
+	return s.store(terminalTicket{path: path, kind: streamLogs, logs: request, expiresAt: expiresAt})
+}
+
+func (s *terminalServer) store(ticket terminalTicket) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("cannot create a terminal ticket: %w", err)
@@ -217,11 +284,7 @@ func (s *terminalServer) issue(path string, request kube.TerminalRequest, expire
 	defer s.mu.Unlock()
 
 	s.expireTicketsLocked(time.Now())
-	s.tickets[token] = terminalTicket{
-		path:      path,
-		request:   request,
-		expiresAt: expiresAt,
-	}
+	s.tickets[token] = ticket
 
 	return token, nil
 }
@@ -341,15 +404,24 @@ func (s *terminalServer) handle(w http.ResponseWriter, r *http.Request) {
 	go session.ping(ctx)
 	go session.read(stdinWriter, cancel)
 
-	// The socket is up, which is all that can be reported before the command starts. A request
+	// The socket is up, which is all that can be reported before the stream starts. A request
 	// the cluster refuses arrives straight after as an exit message.
 	_ = session.control(terminalReady{Type: "ready"})
 
-	session.end(s.run(ctx, ticket.path, ticket.request, kube.TermStreams{
+	streams := kube.TermStreams{
 		Stdin:  stdin,
 		Stdout: session,
 		Sizes:  session.sizes,
-	}))
+	}
+
+	// A log stream ignores stdin and the sizes, but it is the same transport, so it takes the
+	// same streams and reports its end the same way.
+	if ticket.kind == streamLogs {
+		session.end(s.logRun(ctx, ticket.path, ticket.logs, streams))
+		return
+	}
+
+	session.end(s.run(ctx, ticket.path, ticket.request, streams))
 }
 
 func (s *terminalServer) register(session *terminalSession) bool {
@@ -371,7 +443,7 @@ func (s *terminalServer) unregister(session *terminalSession) {
 	s.mu.Unlock()
 }
 
-// closeSessions ends every live session. A kubeconfig switch needs this: a shell belongs to the
+// closeSessions ends every live session. A kubeconfig switch needs this: a session belongs to the
 // cluster it was started on, so it must not outlive the switch.
 func (s *terminalServer) closeSessions() {
 	s.mu.Lock()

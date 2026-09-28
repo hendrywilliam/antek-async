@@ -24,6 +24,8 @@ import {
 	RotateCw,
 	Server,
 	Settings,
+	Share2,
+	Shield,
 	SquarePen,
 	Waypoints,
 } from "lucide-react";
@@ -61,12 +63,14 @@ import {
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { DeploymentsPage } from "@/pages/deployments";
+import { EndpointSlicesPage } from "@/pages/endpoint-slices";
 import { GatewayClassesPage } from "@/pages/gateway-classes";
 import { GatewaysPage } from "@/pages/gateways";
 import { GRPCRoutesPage } from "@/pages/grpc-routes";
 import { HTTPRoutesPage } from "@/pages/http-routes";
 import { ManifestYamlPage } from "@/pages/manifest-yaml";
 import { NamespacesPage } from "@/pages/namespaces";
+import { NetworkPoliciesPage } from "@/pages/network-policies";
 import { NodesPage } from "@/pages/nodes";
 import { PodsPage } from "@/pages/pods";
 import { ServicesPage } from "@/pages/services";
@@ -95,6 +99,8 @@ const MENU_GROUPS: { label: string; entries: MenuEntry[] }[] = [
 		label: "Networking",
 		entries: [
 			{ view: "service" },
+			{ view: "endpointSlice" },
+			{ view: "networkPolicy" },
 			{
 				label: "Gateway API",
 				icon: Waypoints,
@@ -115,6 +121,8 @@ const VIEW_ICONS: Partial<Record<View, ComponentType<{ className?: string }>>> =
 	deployment: Layers,
 	statefulset: Database,
 	service: Network,
+	endpointSlice: Share2,
+	networkPolicy: Shield,
 	manifest: SquarePen,
 	settings: Settings,
 };
@@ -349,6 +357,14 @@ function AppShell() {
 						<Route element={<NodesPage />} path={ROUTES.node.path} />
 						<Route element={<NamespacesPage />} path={ROUTES.namespace.path} />
 						<Route element={<ServicesPage />} path={ROUTES.service.path} />
+						<Route
+							element={<EndpointSlicesPage />}
+							path={ROUTES.endpointSlice.path}
+						/>
+						<Route
+							element={<NetworkPoliciesPage />}
+							path={ROUTES.networkPolicy.path}
+						/>
 						<Route
 							element={<GatewayClassesPage />}
 							path={ROUTES.gatewayClass.path}

@@ -65,6 +65,22 @@ type ServicesState struct {
 	UpdatedAt string             `json:"updatedAt"`
 }
 
+type EndpointSlicesState struct {
+	Items     []kube.EndpointSliceInfo `json:"items"`
+	Loaded    bool                     `json:"loaded"`
+	Loading   bool                     `json:"loading"`
+	Error     string                   `json:"error"`
+	UpdatedAt string                   `json:"updatedAt"`
+}
+
+type NetworkPoliciesState struct {
+	Items     []kube.NetworkPolicyInfo `json:"items"`
+	Loaded    bool                     `json:"loaded"`
+	Loading   bool                     `json:"loading"`
+	Error     string                   `json:"error"`
+	UpdatedAt string                   `json:"updatedAt"`
+}
+
 type GatewayClassesState struct {
 	Items     []kube.GatewayClassInfo `json:"items"`
 	Loaded    bool                    `json:"loaded"`
@@ -100,19 +116,21 @@ type GRPCRoutesState struct {
 // AppState is the single payload shared by GetState and the state:update event, so the
 // frontend needs one reducer and never has to merge racing updates.
 type AppState struct {
-	Config         kube.Status         `json:"config"`
-	Active         string              `json:"active"`
-	Pods           PodsState           `json:"pods"`
-	Deployments    DeploymentsState    `json:"deployments"`
-	StatefulSets   StatefulSetsState   `json:"statefulSets"`
-	Nodes          NodesState          `json:"nodes"`
-	Namespaces     NamespacesState     `json:"namespaces"`
-	Services       ServicesState       `json:"services"`
-	GatewayClasses GatewayClassesState `json:"gatewayClasses"`
-	Gateways       GatewaysState       `json:"gateways"`
-	HTTPRoutes     HTTPRoutesState     `json:"httpRoutes"`
-	GRPCRoutes     GRPCRoutesState     `json:"grpcRoutes"`
-	Error          string              `json:"error"`
+	Config          kube.Status          `json:"config"`
+	Active          string               `json:"active"`
+	Pods            PodsState            `json:"pods"`
+	Deployments     DeploymentsState     `json:"deployments"`
+	StatefulSets    StatefulSetsState    `json:"statefulSets"`
+	Nodes           NodesState           `json:"nodes"`
+	Namespaces      NamespacesState      `json:"namespaces"`
+	Services        ServicesState        `json:"services"`
+	EndpointSlices  EndpointSlicesState  `json:"endpointSlices"`
+	NetworkPolicies NetworkPoliciesState `json:"networkPolicies"`
+	GatewayClasses  GatewayClassesState  `json:"gatewayClasses"`
+	Gateways        GatewaysState        `json:"gateways"`
+	HTTPRoutes      HTTPRoutesState      `json:"httpRoutes"`
+	GRPCRoutes      GRPCRoutesState      `json:"grpcRoutes"`
+	Error           string               `json:"error"`
 }
 
 // resourceHolder is the cached list plus the watch bookkeeping for one resource kind. Only one
@@ -139,16 +157,18 @@ type App struct {
 	// generation identifies the active watch, so a superseded one cannot publish.
 	generation int
 
-	pods           resourceHolder[kube.PodInfo]
-	deployments    resourceHolder[kube.DeploymentInfo]
-	statefulSets   resourceHolder[kube.StatefulSetInfo]
-	nodes          resourceHolder[kube.NodeInfo]
-	namespaces     resourceHolder[kube.NamespaceInfo]
-	services       resourceHolder[kube.ServiceInfo]
-	gatewayClasses resourceHolder[kube.GatewayClassInfo]
-	gateways       resourceHolder[kube.GatewayInfo]
-	httpRoutes     resourceHolder[kube.HTTPRouteInfo]
-	grpcRoutes     resourceHolder[kube.GRPCRouteInfo]
+	pods            resourceHolder[kube.PodInfo]
+	deployments     resourceHolder[kube.DeploymentInfo]
+	statefulSets    resourceHolder[kube.StatefulSetInfo]
+	nodes           resourceHolder[kube.NodeInfo]
+	namespaces      resourceHolder[kube.NamespaceInfo]
+	services        resourceHolder[kube.ServiceInfo]
+	endpointSlices  resourceHolder[kube.EndpointSliceInfo]
+	networkPolicies resourceHolder[kube.NetworkPolicyInfo]
+	gatewayClasses  resourceHolder[kube.GatewayClassInfo]
+	gateways        resourceHolder[kube.GatewayInfo]
+	httpRoutes      resourceHolder[kube.HTTPRouteInfo]
+	grpcRoutes      resourceHolder[kube.GRPCRouteInfo]
 
 	// terminals serves the long-lived pod sessions, a terminal or a followed log. It is outside
 	// the state above because a session is not a list: it is a live connection the drawer owns
@@ -286,6 +306,44 @@ func (a *App) GetPodYAML(namespace, name string) (string, error) {
 	}
 
 	return kube.PodYAML(a.ctx, clientset, namespace, name)
+}
+
+// GetEndpointSliceYAML returns one endpoint slice as YAML for the read-only viewer. Like
+// GetPodYAML it builds a short-lived client instead of reusing the watch, because the viewer can
+// be opened for an object the active menu is not streaming.
+func (a *App) GetEndpointSliceYAML(namespace, name string) (string, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	if path == "" {
+		return "", errors.New("Kubeconfig not found")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return "", err
+	}
+
+	return kube.EndpointSliceYAML(a.ctx, clientset, namespace, name)
+}
+
+// GetNetworkPolicyYAML returns one network policy as YAML for the read-only viewer.
+func (a *App) GetNetworkPolicyYAML(namespace, name string) (string, error) {
+	a.mu.RLock()
+	path := a.config.Path
+	a.mu.RUnlock()
+
+	if path == "" {
+		return "", errors.New("Kubeconfig not found")
+	}
+
+	clientset, err := kube.ClientFor(path)
+	if err != nil {
+		return "", err
+	}
+
+	return kube.NetworkPolicyYAML(a.ctx, clientset, namespace, name)
 }
 
 // gatewayClient builds the Gateway API client for one on-demand request. Like GetPodYAML it reads
@@ -506,6 +564,10 @@ func (a *App) startWatch(resource kube.Resource) {
 		a.namespaces.cancel, a.namespaces.loading, a.namespaces.err = cancel, true, ""
 	case kube.ResourceServices:
 		a.services.cancel, a.services.loading, a.services.err = cancel, true, ""
+	case kube.ResourceEndpointSlices:
+		a.endpointSlices.cancel, a.endpointSlices.loading, a.endpointSlices.err = cancel, true, ""
+	case kube.ResourceNetworkPolicies:
+		a.networkPolicies.cancel, a.networkPolicies.loading, a.networkPolicies.err = cancel, true, ""
 	case kube.ResourceGatewayClasses:
 		a.gatewayClasses.cancel, a.gatewayClasses.loading, a.gatewayClasses.err = cancel, true, ""
 	case kube.ResourceGateways:
@@ -562,6 +624,14 @@ func (a *App) streamResource(ctx context.Context, resource kube.Resource, path s
 	case kube.ResourceServices:
 		watchErr = kube.WatchServices(ctx, clientset, func(items []kube.ServiceInfo) {
 			a.publishServices(generation, items)
+		})
+	case kube.ResourceEndpointSlices:
+		watchErr = kube.WatchEndpointSlices(ctx, clientset, func(items []kube.EndpointSliceInfo) {
+			a.publishEndpointSlices(generation, items)
+		})
+	case kube.ResourceNetworkPolicies:
+		watchErr = kube.WatchNetworkPolicies(ctx, clientset, func(items []kube.NetworkPolicyInfo) {
+			a.publishNetworkPolicies(generation, items)
 		})
 	case kube.ResourceGatewayClasses, kube.ResourceGateways, kube.ResourceHTTPRoutes, kube.ResourceGRPCRoutes:
 		// The Gateway API kinds need their own clientset, so all four are streamed from one helper
@@ -628,6 +698,14 @@ func (a *App) publishServices(generation int, items []kube.ServiceInfo) {
 	publishResource(a, &a.services, generation, items)
 }
 
+func (a *App) publishEndpointSlices(generation int, items []kube.EndpointSliceInfo) {
+	publishResource(a, &a.endpointSlices, generation, items)
+}
+
+func (a *App) publishNetworkPolicies(generation int, items []kube.NetworkPolicyInfo) {
+	publishResource(a, &a.networkPolicies, generation, items)
+}
+
 func (a *App) publishGatewayClasses(generation int, items []kube.GatewayClassInfo) {
 	publishResource(a, &a.gatewayClasses, generation, items)
 }
@@ -659,6 +737,10 @@ func (a *App) failResource(resource kube.Resource, generation int, err error) {
 		failResource(a, &a.namespaces, generation, err)
 	case kube.ResourceServices:
 		failResource(a, &a.services, generation, err)
+	case kube.ResourceEndpointSlices:
+		failResource(a, &a.endpointSlices, generation, err)
+	case kube.ResourceNetworkPolicies:
+		failResource(a, &a.networkPolicies, generation, err)
 	case kube.ResourceGatewayClasses:
 		failResource(a, &a.gatewayClasses, generation, err)
 	case kube.ResourceGateways:
@@ -672,7 +754,7 @@ func (a *App) failResource(resource kube.Resource, generation int, err error) {
 
 // cancelWatchesLocked stops whichever watcher is running. Callers must hold a.mu.
 func (a *App) cancelWatchesLocked() {
-	for _, cancel := range []context.CancelFunc{a.pods.cancel, a.deployments.cancel, a.statefulSets.cancel, a.nodes.cancel, a.namespaces.cancel, a.services.cancel, a.gatewayClasses.cancel, a.gateways.cancel, a.httpRoutes.cancel, a.grpcRoutes.cancel} {
+	for _, cancel := range []context.CancelFunc{a.pods.cancel, a.deployments.cancel, a.statefulSets.cancel, a.nodes.cancel, a.namespaces.cancel, a.services.cancel, a.endpointSlices.cancel, a.networkPolicies.cancel, a.gatewayClasses.cancel, a.gateways.cancel, a.httpRoutes.cancel, a.grpcRoutes.cancel} {
 		if cancel != nil {
 			cancel()
 		}
@@ -684,6 +766,8 @@ func (a *App) cancelWatchesLocked() {
 	a.nodes.cancel = nil
 	a.namespaces.cancel = nil
 	a.services.cancel = nil
+	a.endpointSlices.cancel = nil
+	a.networkPolicies.cancel = nil
 	a.gatewayClasses.cancel = nil
 	a.gateways.cancel = nil
 	a.httpRoutes.cancel = nil
@@ -701,6 +785,8 @@ func (a *App) resetResourcesLocked() {
 	a.nodes = resourceHolder[kube.NodeInfo]{}
 	a.namespaces = resourceHolder[kube.NamespaceInfo]{}
 	a.services = resourceHolder[kube.ServiceInfo]{}
+	a.endpointSlices = resourceHolder[kube.EndpointSliceInfo]{}
+	a.networkPolicies = resourceHolder[kube.NetworkPolicyInfo]{}
 	a.gatewayClasses = resourceHolder[kube.GatewayClassInfo]{}
 	a.gateways = resourceHolder[kube.GatewayInfo]{}
 	a.httpRoutes = resourceHolder[kube.HTTPRouteInfo]{}
@@ -769,6 +855,20 @@ func (a *App) stateLocked() AppState {
 			Loading:   a.services.loading,
 			Error:     a.services.err,
 			UpdatedAt: a.services.updatedAt,
+		},
+		EndpointSlices: EndpointSlicesState{
+			Items:     nonNil(a.endpointSlices.items),
+			Loaded:    a.endpointSlices.loaded,
+			Loading:   a.endpointSlices.loading,
+			Error:     a.endpointSlices.err,
+			UpdatedAt: a.endpointSlices.updatedAt,
+		},
+		NetworkPolicies: NetworkPoliciesState{
+			Items:     nonNil(a.networkPolicies.items),
+			Loaded:    a.networkPolicies.loaded,
+			Loading:   a.networkPolicies.loading,
+			Error:     a.networkPolicies.err,
+			UpdatedAt: a.networkPolicies.updatedAt,
 		},
 		GatewayClasses: GatewayClassesState{
 			Items:     nonNil(a.gatewayClasses.items),

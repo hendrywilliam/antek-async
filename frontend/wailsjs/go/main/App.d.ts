@@ -7,6 +7,8 @@ export function ApplyYAML(arg1:string):Promise<kube.ApplyResult>;
 
 export function DeleteNamespace(arg1:string):Promise<void>;
 
+export function GetEndpointSliceYAML(arg1:string,arg2:string):Promise<string>;
+
 export function GetGRPCRouteYAML(arg1:string,arg2:string):Promise<string>;
 
 export function GetGatewayClassYAML(arg1:string):Promise<string>;
@@ -14,6 +16,8 @@ export function GetGatewayClassYAML(arg1:string):Promise<string>;
 export function GetGatewayYAML(arg1:string,arg2:string):Promise<string>;
 
 export function GetHTTPRouteYAML(arg1:string,arg2:string):Promise<string>;
+
+export function GetNetworkPolicyYAML(arg1:string,arg2:string):Promise<string>;
 
 export function GetNodeUsages():Promise<Array<kube.NodeUsage>>;
 

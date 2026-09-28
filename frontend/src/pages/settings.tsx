@@ -104,6 +104,14 @@ export function SettingsPage() {
 					<ResourceStatus label="StatefulSets" state={state?.statefulSets} />
 					<ResourceStatus label="Services" state={state?.services} />
 					<ResourceStatus
+						label="EndpointSlices"
+						state={state?.endpointSlices}
+					/>
+					<ResourceStatus
+						label="NetworkPolicies"
+						state={state?.networkPolicies}
+					/>
+					<ResourceStatus
 						label="GatewayClass"
 						state={state?.gatewayClasses}
 					/>

@@ -7,6 +7,8 @@ export type View =
 	| "deployment"
 	| "statefulset"
 	| "service"
+	| "endpointSlice"
+	| "networkPolicy"
 	| "gatewayClass"
 	| "gateway"
 	| "httpRoute"
@@ -56,6 +58,18 @@ export const ROUTES: Record<View, RouteDef> = {
 		view: "service",
 		path: "/services",
 		label: "Services",
+		subtitle: "All namespaces",
+	},
+	endpointSlice: {
+		view: "endpointSlice",
+		path: "/endpoint-slices",
+		label: "EndpointSlices",
+		subtitle: "All namespaces",
+	},
+	networkPolicy: {
+		view: "networkPolicy",
+		path: "/network-policies",
+		label: "NetworkPolicies",
 		subtitle: "All namespaces",
 	},
 	// The Gateway API kinds are CRDs, so they are separate routes under the same Networking

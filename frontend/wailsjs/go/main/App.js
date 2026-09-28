@@ -10,6 +10,10 @@ export function DeleteNamespace(arg1) {
   return window['go']['main']['App']['DeleteNamespace'](arg1);
 }
 
+export function GetEndpointSliceYAML(arg1, arg2) {
+  return window['go']['main']['App']['GetEndpointSliceYAML'](arg1, arg2);
+}
+
 export function GetGRPCRouteYAML(arg1, arg2) {
   return window['go']['main']['App']['GetGRPCRouteYAML'](arg1, arg2);
 }
@@ -24,6 +28,10 @@ export function GetGatewayYAML(arg1, arg2) {
 
 export function GetHTTPRouteYAML(arg1, arg2) {
   return window['go']['main']['App']['GetHTTPRouteYAML'](arg1, arg2);
+}
+
+export function GetNetworkPolicyYAML(arg1, arg2) {
+  return window['go']['main']['App']['GetNetworkPolicyYAML'](arg1, arg2);
 }
 
 export function GetNodeUsages() {

@@ -56,6 +56,28 @@ export namespace kube {
 	        this.age = source["age"];
 	    }
 	}
+	export class EndpointSliceInfo {
+	    namespace: string;
+	    name: string;
+	    addressType: string;
+	    ports: string;
+	    endpoints: string;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EndpointSliceInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.addressType = source["addressType"];
+	        this.ports = source["ports"];
+	        this.endpoints = source["endpoints"];
+	        this.age = source["age"];
+	    }
+	}
 	export class GRPCRouteInfo {
 	    namespace: string;
 	    name: string;
@@ -169,6 +191,24 @@ export namespace kube {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.status = source["status"];
+	        this.age = source["age"];
+	    }
+	}
+	export class NetworkPolicyInfo {
+	    namespace: string;
+	    name: string;
+	    podSelector: string;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkPolicyInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.podSelector = source["podSelector"];
 	        this.age = source["age"];
 	    }
 	}
@@ -515,6 +555,82 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class NetworkPoliciesState {
+	    items: kube.NetworkPolicyInfo[];
+	    loaded: boolean;
+	    loading: boolean;
+	    error: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkPoliciesState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], kube.NetworkPolicyInfo);
+	        this.loaded = source["loaded"];
+	        this.loading = source["loading"];
+	        this.error = source["error"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EndpointSlicesState {
+	    items: kube.EndpointSliceInfo[];
+	    loaded: boolean;
+	    loading: boolean;
+	    error: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EndpointSlicesState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], kube.EndpointSliceInfo);
+	        this.loaded = source["loaded"];
+	        this.loading = source["loading"];
+	        this.error = source["error"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ServicesState {
 	    items: kube.ServiceInfo[];
 	    loaded: boolean;
@@ -752,6 +868,8 @@ export namespace main {
 	    nodes: NodesState;
 	    namespaces: NamespacesState;
 	    services: ServicesState;
+	    endpointSlices: EndpointSlicesState;
+	    networkPolicies: NetworkPoliciesState;
 	    gatewayClasses: GatewayClassesState;
 	    gateways: GatewaysState;
 	    httpRoutes: HTTPRoutesState;
@@ -772,6 +890,8 @@ export namespace main {
 	        this.nodes = this.convertValues(source["nodes"], NodesState);
 	        this.namespaces = this.convertValues(source["namespaces"], NamespacesState);
 	        this.services = this.convertValues(source["services"], ServicesState);
+	        this.endpointSlices = this.convertValues(source["endpointSlices"], EndpointSlicesState);
+	        this.networkPolicies = this.convertValues(source["networkPolicies"], NetworkPoliciesState);
 	        this.gatewayClasses = this.convertValues(source["gatewayClasses"], GatewayClassesState);
 	        this.gateways = this.convertValues(source["gateways"], GatewaysState);
 	        this.httpRoutes = this.convertValues(source["httpRoutes"], HTTPRoutesState);
@@ -797,6 +917,8 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	

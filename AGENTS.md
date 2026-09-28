@@ -3,8 +3,9 @@
 ## Project State
 
 `antek-async` is a Wails v2 desktop app that shows Kubernetes Nodes, Namespaces, Pods,
-Deployments, StatefulSets, Services and the four Gateway API kinds (GatewayClass, Gateway,
-HTTPRoute and GRPCRoute). Pods, the workload controllers, services and the namespaced Gateway API
+Deployments, StatefulSets, Services, EndpointSlices, NetworkPolicies and the four Gateway API
+kinds (GatewayClass, Gateway, HTTPRoute and GRPCRoute). Pods, the workload controllers, services,
+endpoint slices, network policies and the namespaced Gateway API
 kinds span **all namespaces**; nodes, namespaces and gateway classes are cluster scoped. It is
 deliberately small: no resource detail, no multi-cluster switching, and every list is filtered
 and grouped on the client. Each menu is fetched from the cluster **only
@@ -108,6 +109,9 @@ statefulsets.go StatefulSetInfo / WatchStatefulSets
 services.go    ServiceInfo / WatchServices
                                 kubectl NAME / TYPE / CLUSTER-IP / EXTERNAL-IP / PORT(S)
                                 / AGE columns
+endpointslices.go EndpointSliceInfo / WatchEndpointSlices
+                                NAMESPACE / NAME / ADDRESS TYPE / PORTS / ENDPOINTS / AGE,
+                                the two list columns capped the way kubectl caps them
 gatewayapi.go  conditionStatus / joinOrNone / gatewayAddresses / routeHostnames /
                gatewayAPIError  the helpers and the missing-CRD message the four
                                 Gateway API kinds share
@@ -146,7 +150,8 @@ frontend/src/routes.ts        route path/label/subtitle per menu; no cluster kin
 frontend/src/app-context.tsx  AppContext: AppState plus busy/error/run/reload
 frontend/src/use-resource.ts  per-page hook that starts the kind the page streams
 frontend/src/pages            one page per menu: pods, deployments, statefulsets,
-                              nodes, namespaces, services, gateway-classes, gateways,
+                              nodes, namespaces, services, endpoint-slices,
+                              network-policies, gateway-classes, gateways,
                               http-routes, grpc-routes, manifest-yaml, settings
 frontend/src/style.css        Tailwind v4 entry, light-only blue-grey tokens, Inter at 14px
 frontend/src/use-terminal.ts  the pod terminal's xterm instance and WebSocket
@@ -217,6 +222,17 @@ frontend/src/components/
   `HTTPRouteYAML` and `GRPCRouteYAML` per kind file, all mirroring `PodYAML` down to the hand-set
   `apiVersion` (from `gatewayAPIGroupVersion`) and the dropped `managedFields`. `App.gatewayClient`
   is what builds the client for those four on-demand reads.
+- **EndpointSlices and NetworkPolicies are built-in kinds**, so they come from client-go exactly the
+  way services and nodes do, with no second clientset: `DiscoveryV1().EndpointSlices()` and
+  `NetworkingV1().NetworkPolicies()`, and their YAML readers reuse the core client the way
+  `PodYAML` does. Their columns are ports of the two printers kubectl uses. `endpointSlicePorts`
+  and `endpointSliceEndpoints` both go through `cappedList`, which keeps kubectl's three-entry cap,
+  its `+ N more...` tail and its `<unset>` placeholder. Neither list is sorted, because the API
+  server renders a slice's ports and addresses as-is. POD-SELECTOR is not reimplemented at all:
+  `toNetworkPolicyInfo` calls `metav1.FormatLabelSelector`, the very function kubectl's printer
+  calls, so an empty selector, which means every pod in the namespace, reads `<none>` for free.
+  EndpointSlices and NetworkPolicies group by namespace like every other namespaced kind, plus the
+  address type and the pod selector respectively, which are the two values worth bucketing here.
 - `ApplyYAML` in `apply.go` is the write path for creating and updating. It decodes one YAML or
   JSON document into an `unstructured.Unstructured`, resolves the kind through discovery and
   `restmapper` so any kind
@@ -309,14 +325,16 @@ frontend/src/components/
 ### Backend to frontend contract
 
 `GetState`, `SelectResource`, `PickKubeconfig` and `ResetKubeconfig` all return the same
-`AppState`; `GetPodYAML`, `GetPodContainers`, `OpenTerminal`, `OpenPodLogs`, `ApplyYAML`,
+`AppState`; `GetPodYAML`, `GetEndpointSliceYAML`, `GetNetworkPolicyYAML`, `GetPodContainers`,
+`OpenTerminal`, `OpenPodLogs`, `ApplyYAML`,
 `DeleteNamespace`,
 `GetPodUsages`, `GetNodeUsages` and the four Gateway API YAML readers (`GetGatewayClassYAML`,
 `GetGatewayYAML`, `GetHTTPRouteYAML`, `GetGRPCRouteYAML`) are
 the on-demand requests
 outside the watch and return their own types, and each of them reports its own failure to the
 page that asked instead of through `AppState`. `AppState` carries the config plus one state object per resource
-(`nodes`, `namespaces`, `pods`, `deployments`, `statefulSets`, `services`, `gatewayClasses`,
+(`nodes`, `namespaces`, `pods`, `deployments`, `statefulSets`, `services`, `endpointSlices`,
+`networkPolicies`, `gatewayClasses`,
 `gateways`, `httpRoutes`, `grpcRoutes`), each holding `items`,
 `loaded`,
 `loading`, `error` and `updatedAt`, so the frontend renders loading and failure per menu without
@@ -370,8 +388,8 @@ input, but it speaks the same protocol. Nothing about a session reaches `AppStat
   fallback if it is ever wanted.
 - **The Gateway API kinds need a second clientset, so `streamResource` builds one for them.** The
   core client is still built at the top of that function and goes unused on the gateway path,
-  which costs one kubeconfig read per menu open and is deliberate: it keeps the six existing kinds
-  on exactly the code path they had.
+  which costs one kubeconfig read per menu open and is deliberate: it keeps the eight existing
+  kinds on exactly the code path they had.
 - Adding client-go required network access for a few transitive modules that were missing
   from the local module cache; expect the first `go mod tidy` after a dependency change to
   download.
@@ -693,6 +711,15 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   (`<none>`, explicit external IPs, `<pending>` for a load balancer without an address, sorted
   and deduplicated ingress addresses, and the ExternalName target), the PORT(S) column with and
   without a node port, Age, and the namespace-then-name sorting.
+- `endpointslices_test.go` covers the two list columns kubectl caps: a numbered port, a port that
+  only has a name, a port with neither (the `*` wildcard), the three-entry join, the `+ N more...`
+  tail, and `<unset>` for a slice with nothing to show, plus the address flattening keeping stored
+  order across endpoints. It also covers the YAML reader against the fake clientset: the hand-set
+  `apiVersion`/`kind`, `managedFields` being dropped, and a refused read naming the slice.
+- `networkpolicies_test.go` covers the POD-SELECTOR column through the cases that matter: an
+  empty selector reading `<none>`, one and two match labels with the labels sorted by key, a match
+  expression rendered as set membership, the flattening and namespace-then-name sorting, and the
+  same YAML reader checks.
 - `metrics_test.go` covers the CPU and memory path. The sums and the formatting are checked
   against the same numbers kubectl's own printer test uses (0.2 + 0.2 cores becomes `400m`,
   1Gi + 1Gi becomes `2048Mi`), and the two `Usages` readers are tested against an `httptest`

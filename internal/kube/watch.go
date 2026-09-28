@@ -22,6 +22,8 @@ const (
 	ResourceDeployments    Resource = "deployments"
 	ResourceStatefulSets   Resource = "statefulSets"
 	ResourceServices       Resource = "services"
+	ResourceEndpointSlices Resource = "endpointSlices"
+	ResourceNetworkPolicies Resource = "networkPolicies"
 	ResourceGatewayClasses Resource = "gatewayClasses"
 	ResourceGateways       Resource = "gateways"
 	ResourceHTTPRoutes     Resource = "httpRoutes"
@@ -32,6 +34,7 @@ const (
 func (r Resource) Valid() bool {
 	switch r {
 	case ResourceNodes, ResourceNamespaces, ResourcePods, ResourceDeployments, ResourceStatefulSets, ResourceServices,
+		ResourceEndpointSlices, ResourceNetworkPolicies,
 		ResourceGatewayClasses, ResourceGateways, ResourceHTTPRoutes, ResourceGRPCRoutes:
 		return true
 	default:

@@ -148,10 +148,11 @@ frontend/src/use-resource.ts  per-page hook that starts the kind the page stream
 frontend/src/pages            one page per menu: pods, deployments, statefulsets,
                               nodes, namespaces, services, gateway-classes, gateways,
                               http-routes, grpc-routes, manifest-yaml, settings
-frontend/src/style.css        Tailwind v4 entry, dark-only black tokens, Inter at 14px
+frontend/src/style.css        Tailwind v4 entry, light-only blue-grey tokens, Inter at 14px
 frontend/src/use-terminal.ts  the pod terminal's xterm instance and WebSocket
 frontend/src/use-log-stream.ts the pod log viewer's read-only xterm instance and WebSocket
 frontend/src/terminal-theme.ts the xterm theme, font and factory the two session hooks share
+frontend/src/use-drawer-resize.ts the drag-to-resize width both pod session drawers share
 frontend/src/components/
   resource-table.tsx          generic table with filter/Group By on the client
   status-label.tsx            StatusLabel/NodeStatusLabel/NamespaceStatusLabel, the
@@ -159,7 +160,8 @@ frontend/src/components/
   usage-cell.tsx              CPU and memory stacked in one cell, CPU on top
   terminal-drawer.tsx         drawer with the container picker that hosts the terminal
   log-drawer.tsx              read-only drawer that hosts the pod log viewer
-  yaml-style.ts               shared monochrome CodeMirror theme and highlight
+  drawer-resize-handle.tsx    the strip that drags a pod session drawer wider or narrower
+  yaml-style.ts               shared CodeMirror theme and the YAML syntax colours
   yaml-viewer.tsx             read-only CodeMirror YAML viewer
   yaml-editor.tsx             editable CodeMirror YAML editor
   yaml-drawer.tsx             the one YAML drawer; takes a noun and a per-kind fetcher
@@ -229,7 +231,11 @@ frontend/src/components/
   `ExecTerminal` in `terminal.go` runs `exec` (not `attach`) in one container with a TTY, so it
   works on any pod
   whose image carries a shell; `/bin/sh` is the default because it is the one shell every
-  non-distroless image has. It builds the executor `kubectl exec` builds, a WebSocket upgrade
+  non-distroless image has, and the command runs through `env` with `TERM=xterm-256color` because
+  the exec API carries no environment: a session with no TERM to advertise is a dumb terminal to
+  everything inside it, so a prompt definition or a tool such as ls, git and less drops its colour
+  and the terminal reads as plain white. It builds the executor `kubectl exec` builds, a WebSocket
+  upgrade
   with the SPDY protocol behind it, and only an upgrade failure falls back, so an error from
   inside the container still reaches the drawer instead of being retried on the other protocol.
   Like `ApplyYAML` it takes a kubeconfig path, because the executor needs the `*rest.Config` as
@@ -382,16 +388,25 @@ input, but it speaks the same protocol. Nothing about a session reaches `AppStat
 - **React StrictMode mounts effects twice in dev.** `EventsOn` returns an unsubscribe
   function and `App.tsx` calls it in the effect cleanup; skipping that leaks a listener and
   duplicates every update.
-- **The app is dark only, and the palette is black, white and grey with one exception: status
-  text.** `index.html` hard codes `class="dark"` on `<html>` and the `.dark` block in
-  `src/style.css` is the active theme (pure black page, white text, lift comes from borders and
-  greys); the light `:root` set is an unused fallback that exists because shadcn expects it.
-  `main.go`'s window `BackgroundColour` must match the theme, since it shows before the webview
-  paints. `StatusLabel` in `components/status-label.tsx` is the only place allowed to use colour,
-  taken from
-  Tailwind's default palette: `text-emerald-400` healthy, `text-amber-400` still starting,
-  `text-red-400` for failures. Status is plain coloured **text**, not a badge, so do not
-  reintroduce background or border chips. Do not add colour tokens to `style.css` for this.
+- **The app is light only, and the palette is one four-anchor ramp with two exceptions: the
+  accent and status text.** The anchors are `#EAEFEF` (lightest: page, card, popover), `#BFC9D1`
+  (light: sidebar panel, hover, muted surface), `#25343F` (darkest: text) and `#FF9B51`, the single
+  accent, reserved for what means "act here": the primary button, the focus ring and the active
+  menu marker. Two shades are derived from the anchors: `#53616B`, the page blended 30% toward the
+  light anchor, for secondary text (`--muted-foreground`), and `#44525C`, the darkest anchor
+  blended a fifth of the way toward that same anchor, for a surface that sits above the page in
+  the inverted fallback. `index.html` carries no theme class, so the `:root` block in
+  `src/style.css` is the active theme and the `.dark` block is the unused inversion that only
+  matters if that class is ever put back on `<html>`. Separation comes from borders, written as
+  `rgb(... / alpha)` rather than an `oklch()` with an alpha channel, and from the grey sidebar
+  rather than a lighter page. The terminal is the one surface outside all of this: it stays pure
+  black, because a shell's ANSI ramp needs the contrast. `main.go`'s window `BackgroundColour` must match the theme, since it shows before the
+  webview paints. `StatusLabel` in `components/status-label.tsx` is the only place in the app's own
+  chrome allowed to use colour, taken from Tailwind's default palette: `text-emerald-700` healthy,
+  `text-amber-700` still starting, `text-red-700` for failures. The 700 shades rather than the 400
+  ones are what stay readable on a light page, and the same shade is what every inline error
+  message uses. Status is plain coloured **text**, not a badge, so do not reintroduce background
+  or border chips. Do not add colour tokens to `style.css` for this.
 - **Base font is Inter at 14px.** `src/main.tsx` imports `@fontsource-variable/inter` (bundled
   locally so the desktop app never needs the network) and `@theme inline` wires it through
   `--font-sans`, which Tailwind's preflight picks up via `--default-font-family`. `body` sets
@@ -512,9 +527,9 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   then does nothing.
 - **The xterm theme uses literal hex, not the `style.css` tokens**, because xterm's colour parser
   cannot read `oklch()`. It lives once in `terminal-theme.ts`, which both the terminal and the log
-  viewer build their emulator from, so the two cannot drift. The app is dark only, so the terminal
-  carries its own grey ramp, and the ANSI entries are deliberately part of it: a shell's colours
-  are flattened to greys to keep the terminal inside the app's black, white and grey rule.
+  viewer build their emulator from, so the two cannot drift. Unlike the rest of the app it is
+  deliberately colourful: the ANSI ramp is Tailwind's 400/300 shades, because a shell's colours and
+  a log's severity levels carry meaning that greys would throw away.
 - **The log viewer sets `convertEol`, because a followed log has no PTY behind it.** A log line ends
   in a bare LF, and xterm would only move the caret down a line and leave it in the same column,
   which paints the log as a staircase; the LF-to-CRLF translation a PTY's termios normally does is
@@ -536,10 +551,11 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   the cache and `go mod tidy` needed them, so expect the same after any change that touches the
   exec path.
 - **CodeMirror's `basicSetup` registers its default highlight style as a fallback**, which is why
-  the monochrome `yamlHighlightStyle` in `yaml-viewer.tsx` wins without fighting it. Keep the editor
-  colourless: the theme sets `{dark: true}` and uses the app's CSS variables. Note that the
-  `codemirror` meta package does not re-export `EditorState`, and the read-only viewer needs only
-  `EditorView.editable.of(false)`.
+  the `yamlHighlightStyle` in `components/yaml-style.ts` wins without fighting it. It keeps the
+  editor on Tailwind's 700 shades, the same ramp the status text uses, because the 400 shades the
+  dark theme used are unreadable on a light page; the theme itself sets `{dark: false}` and uses
+  the app's CSS variables. Note that the `codemirror` meta package does not re-export
+  `EditorState`, and the read-only viewer needs only `EditorView.editable.of(false)`.
 - **The YAML drawer opens from the right, and its width lives in `src/style.css`.** The Drawer
   caps the right direction at `sm:max-w-sm` (24rem) via
   `data-[vaul-drawer-direction=right]:sm:max-w-sm`, which compiles to the same specificity as any
@@ -547,6 +563,17 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   unlayered `[data-slot="drawer-content"][data-vaul-drawer-direction="right"]` rule in
   `style.css` beats Tailwind's `utilities` layer, so the drawer gets 48rem and `drawer.tsx` stays
   pristine. A right drawer is full height, so the editor area is just `flex-1 min-h-0`.
+- **The pod session drawers are resizable, and that is why their width is inline.**
+  `useDrawerResize` returns `{ maxWidth: width, width }` and the drawer hands it to `DrawerContent`
+  as a `style`, so the width beats both the Drawer's `w-3/4` / `sm:max-w-sm` and the unlayered rule
+  above, which a class at the call site could not. The default is the same 48rem, clamped to the
+  window so the page behind the drawer is never fully covered, and the drag lives on
+  `DrawerResizeHandle`, the strip along the left edge that captures the pointer. The xterm refits
+  during a drag because both session hooks already observe their host with a `ResizeObserver`.
+- **The terminal is only as tall as the drawer because of one CSS rule.** xterm sizes its screen to
+  a row count and positions its viewport against `.xterm` rather than the host element, so
+  `[data-slot="terminal-host"] .xterm { height: 100% }` in `style.css` is what stretches the
+  emulator to the `flex-1 min-h-0` box the drawer gives it.
 - **The YAML drawer can only be closed with its own button, and that button must set the
   controlled state directly.** `dismissible={false}` makes vaul ignore overlay clicks, dragging
   and Escape, but it also makes vaul swallow its own close path: the `onOpenChange` handler it
@@ -563,14 +590,14 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   silently applying the first. A namespaced manifest without `metadata.namespace` lands in
   `default`, matching kubectl (`placement`), while a cluster-scoped kind has its namespace
   stripped. There is no scale and no dry-run. The page reports its own outcome: the
-  error goes inline in `text-red-400`, the same colour the YAML drawer uses, and a success is
+  error goes inline in `text-red-700`, the same colour the YAML drawer uses, and a success is
   plain text, so the shared error banner stays reserved for configuration problems.
 - **The editor must not be rebuilt on every keystroke.** `YamlEditor`
   (`components/yaml-editor.tsx`) creates its `EditorView` once per seed document and reports
   changes through `EditorView.updateListener`; handing the live value back as `initialDocument`
   would reset the cursor and the undo history, so clearing the page remounts the editor by
-  bumping `key={seed}` instead. `components/yaml-style.ts` holds the monochrome theme and
-  highlight style that the editor and the viewer share, so the two never drift apart. Only the
+  bumping `key={seed}` instead. `components/yaml-style.ts` holds the theme and highlight style
+  that the editor and the viewer share, so the two never drift apart. Only the
   viewer disables editing, because CodeMirror's `basicSetup` is editable by default; the editor
   therefore needed no new npm packages.
 - **The manifest page streams no kube kind but still has a backend method.** Like Settings it uses
@@ -634,7 +661,7 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   as Settings, calls `useApp()`.
 - Add new UI primitives with the registry instead of hand-writing markup:
   `cd frontend && npx shadcn@latest add <component>`. Treat the generated files under
-  `src/components/ui` as owned source that can be edited, and keep them monochrome.
+  `src/components/ui` as owned source that can be edited, and keep them on the palette tokens.
 
 ## Testing
 
@@ -686,7 +713,8 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   kinds, and the cluster-scoped name sort against the namespace-then-name sort.
 - `terminal_test.go` covers the terminal's own logic: the container defaulting (an empty request
   takes the first container, and a name the pod does not declare is refused by a message that
-  names it), the shell that fills in for a missing command, and the size queue (the size the
+  names it), the command a session runs (the shell that fills in for a missing one, and the `env`
+  wrapper that gives it a `TERM`), and the size queue (the size the
   drawer already knows comes back from the first `Next` without waiting, a zero dimension is
   skipped rather than sent, and `Next` reports nil once the session ends so the stream's resize
   loop stops).

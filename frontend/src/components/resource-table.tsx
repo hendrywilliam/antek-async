@@ -202,7 +202,7 @@ export function ResourceTable<T>({
 				<div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border">
 					{error !== "" ? (
 						<div className="flex max-w-xl flex-col items-center gap-3 px-6 text-center">
-							<p className="text-red-400">{error}</p>
+							<p className="text-red-700">{error}</p>
 							<Button onClick={onRetry} size="sm" variant="outline">
 								Retry
 							</Button>

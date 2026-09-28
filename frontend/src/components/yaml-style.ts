@@ -5,24 +5,24 @@ import { EditorView } from "codemirror";
 export const yamlHighlightStyle = HighlightStyle.define([
   {
     tag: tags.propertyName,
-    color: "#61AFEF", // key/property → biru
+    color: "#0369a1", // key/property → biru
     fontWeight: "600",
   },
   {
     tag: [tags.string, tags.special(tags.string), tags.content],
-    color: "#98C379", // string value → hijau
+    color: "#047857", // string value → hijau
   },
   {
     tag: [tags.number, tags.bool, tags.null, tags.atom],
-    color: "#D19A66", // number/boolean/null → oranye
+    color: "#b45309", // number/boolean/null → oranye
   },
   {
     tag: [tags.labelName, tags.typeName, tags.keyword],
-    color: "#C678DD", // keyword/anchor/tag → ungu
+    color: "#7e22ce", // keyword/anchor/tag → ungu
   },
   {
     tag: tags.meta,
-    color: "#56B6C2", // meta (mis. document markers ---) → cyan
+    color: "#0e7490", // meta (mis. document markers ---) → cyan
   },
   {
     tag: [tags.comment, tags.lineComment],
@@ -64,5 +64,5 @@ export const yamlTheme = EditorView.theme(
         "color-mix(in oklab, var(--foreground) 22%, transparent)",
     },
   },
-  { dark: true },
+  { dark: false },
 );

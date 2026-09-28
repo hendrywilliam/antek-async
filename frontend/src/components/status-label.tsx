@@ -11,9 +11,9 @@ const WARN_STATUSES = new Set([
 ]);
 
 const TONE_CLASSES = {
-	ok: "text-emerald-400",
-	warn: "text-amber-400",
-	bad: "text-red-400",
+	ok: "text-emerald-700",
+	warn: "text-amber-700",
+	bad: "text-red-700",
 } as const;
 
 function statusTone(status: string): "ok" | "warn" | "bad" {

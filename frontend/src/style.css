@@ -43,78 +43,88 @@
 }
 
 /*
- * Unused fallback: the app forces `.dark` on <html> in index.html, so this light set
- * only matters if that class is ever removed. Kept achromatic to match.
+ * The palette is four anchors: #EAEFEF (234 239 239) lightest, #BFC9D1 (191 201 209) light,
+ * #25343F (37 52 63) darkest and #FF9B51 (255 155 81) the single accent. Two shades are
+ * derived from them: #53616B, the page blended 30% toward the light anchor, for secondary
+ * text, and #44525C, the darkest anchor blended a fifth of the way toward that same anchor,
+ * for a surface that sits above the page in the inverted fallback.
+ */
+
+/*
+ * The app is light only. #EAEFEF surfaces with #25343F text and a #BFC9D1 sidebar panel;
+ * #FF9B51 is reserved for the things that mean "act here", which is the primary button, the
+ * focus ring and the active menu marker. `color-scheme: light` makes the webview render
+ * native widgets and scrollbars to match.
  */
 :root {
+    color-scheme: light;
     --radius: 0.5rem;
 
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.4 0 0);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    --background: #eaefef;
+    --foreground: #25343f;
+    --card: #eaefef;
+    --card-foreground: #25343f;
+    --popover: #eaefef;
+    --popover-foreground: #25343f;
+    --primary: #ff9b51;
+    --primary-foreground: #25343f;
+    --secondary: #bfc9d1;
+    --secondary-foreground: #25343f;
+    --muted: #bfc9d1;
+    --muted-foreground: #53616b;
+    --accent: #bfc9d1;
+    --accent-foreground: #25343f;
+    --destructive: #25343f;
+    --destructive-foreground: #eaefef;
+    --border: rgb(37 52 63 / 18%);
+    --input: rgb(37 52 63 / 25%);
+    --ring: #ff9b51;
 
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --sidebar: #bfc9d1;
+    --sidebar-foreground: #25343f;
+    --sidebar-primary: #ff9b51;
+    --sidebar-primary-foreground: #25343f;
+    --sidebar-accent: #eaefef;
+    --sidebar-accent-foreground: #25343f;
+    --sidebar-border: rgb(37 52 63 / 18%);
+    --sidebar-ring: #ff9b51;
 }
 
 /*
- * The app is dark only. Black surfaces with white text; separation comes from borders
- * and slightly lifted greys (hover, popovers) instead of a lighter page background.
- * `color-scheme: dark` makes the webview render native widgets and scrollbars to match.
+ * Unused fallback: `index.html` no longer carries `class="dark"`, so this set only matters if
+ * that class is ever put back. It is the palette read the other way up.
  */
 .dark {
     color-scheme: dark;
 
-    --background: oklch(0 0 0);
-    --foreground: oklch(1 0 0);
-    --card: oklch(0 0 0);
-    --card-foreground: oklch(1 0 0);
-    --popover: oklch(0.13 0 0);
-    --popover-foreground: oklch(1 0 0);
-    --primary: oklch(1 0 0);
-    --primary-foreground: oklch(0 0 0);
-    --secondary: oklch(0.18 0 0);
-    --secondary-foreground: oklch(1 0 0);
-    --muted: oklch(0.18 0 0);
-    --muted-foreground: oklch(0.78 0 0);
-    --accent: oklch(0.2 0 0);
-    --accent-foreground: oklch(1 0 0);
-    --destructive: oklch(0.6 0 0);
-    --destructive-foreground: oklch(0 0 0);
-    --border: oklch(1 0 0 / 15%);
-    --input: oklch(1 0 0 / 20%);
-    --ring: oklch(0.65 0 0);
+    --background: #25343f;
+    --foreground: #eaefef;
+    --card: #25343f;
+    --card-foreground: #eaefef;
+    --popover: #44525c;
+    --popover-foreground: #eaefef;
+    --primary: #ff9b51;
+    --primary-foreground: #25343f;
+    --secondary: #44525c;
+    --secondary-foreground: #eaefef;
+    --muted: #44525c;
+    --muted-foreground: #bfc9d1;
+    --accent: #44525c;
+    --accent-foreground: #eaefef;
+    --destructive: #44525c;
+    --destructive-foreground: #eaefef;
+    --border: rgb(191 201 209 / 18%);
+    --input: rgb(191 201 209 / 25%);
+    --ring: #ff9b51;
 
-    --sidebar: oklch(0 0 0);
-    --sidebar-foreground: oklch(1 0 0);
-    --sidebar-primary: oklch(1 0 0);
-    --sidebar-primary-foreground: oklch(0 0 0);
-    --sidebar-accent: oklch(0.18 0 0);
-    --sidebar-accent-foreground: oklch(1 0 0);
-    --sidebar-border: oklch(1 0 0 / 15%);
-    --sidebar-ring: oklch(0.65 0 0);
+    --sidebar: #25343f;
+    --sidebar-foreground: #eaefef;
+    --sidebar-primary: #ff9b51;
+    --sidebar-primary-foreground: #25343f;
+    --sidebar-accent: #44525c;
+    --sidebar-accent-foreground: #eaefef;
+    --sidebar-border: rgb(191 201 209 / 18%);
+    --sidebar-ring: #ff9b51;
 }
 
 @layer base {
@@ -152,8 +162,20 @@
  * `data-[vaul-drawer-direction=right]:sm:max-w-sm`, which compiles to a selector with the same
  * specificity as an override passed at the call site, so source order would decide against us.
  * This rule is unlayered, and unlayered styles beat Tailwind's utilities layer, so the YAML
- * drawer gets room to breathe without editing the registry component.
+ * drawer gets room to breathe without editing the registry component. The pod session drawers
+ * override width and max-width inline through `useDrawerResize`, which is what makes them
+ * resizable: an inline style beats this rule as well.
  */
 [data-slot="drawer-content"][data-vaul-drawer-direction="right"] {
     max-width: 48rem;
+}
+
+/*
+ * xterm sizes its screen to a row count and positions its viewport against `.xterm` rather than the
+ * element it is handed, so a tall drawer would otherwise leave dead space under the terminal.
+ * Stretching the emulator to its host is what keeps the terminal exactly as tall as the drawer on
+ * every resize.
+ */
+[data-slot="terminal-host"] .xterm {
+    height: 100%;
 }

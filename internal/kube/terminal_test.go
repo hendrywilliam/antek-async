@@ -67,12 +67,14 @@ func TestResolveContainer(t *testing.T) {
 }
 
 func TestTerminalCommandDefaultsToShell(t *testing.T) {
-	if got, want := (TerminalRequest{}).command(), []string{"/bin/sh"}; !reflect.DeepEqual(got, want) {
+	// The command is wrapped so the session advertises a TERM, which is what makes the shell and
+	// its tools keep their colours.
+	if got, want := (TerminalRequest{}).command(), []string{"env", "TERM=xterm-256color", "/bin/sh"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("command() = %v, want %v", got, want)
 	}
 
 	named := TerminalRequest{Command: []string{"bash", "-l"}}
-	if got, want := named.command(), []string{"bash", "-l"}; !reflect.DeepEqual(got, want) {
+	if got, want := named.command(), []string{"env", "TERM=xterm-256color", "bash", "-l"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("command() = %v, want %v", got, want)
 	}
 }

@@ -109,7 +109,7 @@ export function YamlDrawer({
 						</p>
 					)}
 					{!loading && error !== "" && (
-						<p className="h-full overflow-auto p-6 text-center text-red-400">
+						<p className="h-full overflow-auto p-6 text-center text-red-700">
 							{error}
 						</p>
 					)}

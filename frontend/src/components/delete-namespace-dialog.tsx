@@ -108,7 +108,7 @@ export function DeleteNamespaceDialog({
 						/>
 					</div>
 
-					{error !== "" && <p className="break-words text-red-400">{error}</p>}
+					{error !== "" && <p className="break-words text-red-700">{error}</p>}
 
 					<DialogFooter>
 						<Button
@@ -119,7 +119,7 @@ export function DeleteNamespaceDialog({
 						>
 							Cancel
 						</Button>
-						{/* No red button: the palette stays monochrome, so the weight of the text
+						{/* No red button: the palette carries no red, so the weight of the text
 						    carries the warning instead of a colour. */}
 						<Button disabled={deleting} type="submit">
 							{deleting && <LoaderCircle className="animate-spin" />}

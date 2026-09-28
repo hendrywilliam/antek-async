@@ -63,7 +63,7 @@ export function ManifestYamlPage() {
 			</p>
 		);
 	} else if (error !== "") {
-		status = <p className="break-words text-red-400">{error}</p>;
+		status = <p className="break-words text-red-700">{error}</p>;
 	} else if (result != null) {
 		status = <p>Applied {describeTarget(result)}</p>;
 	}

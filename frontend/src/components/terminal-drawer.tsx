@@ -2,6 +2,8 @@ import { LoaderCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { GetPodContainers } from "../../wailsjs/go/main/App";
 import { useTerminal } from "@/use-terminal";
+import { useDrawerResize } from "@/use-drawer-resize";
+import { DrawerResizeHandle } from "@/components/drawer-resize-handle";
 import { Button } from "@/components/ui/button";
 import {
 	Drawer,
@@ -40,6 +42,10 @@ export function TerminalDrawer({
 	const [container, setContainer] = useState("");
 	const [containersError, setContainersError] = useState("");
 	const [attempt, setAttempt] = useState(0);
+
+	// The drawer can be dragged wider or narrower, and the terminal refits to it through the same
+	// ResizeObserver that fits the first paint.
+	const resize = useDrawerResize();
 
 	useEffect(() => {
 		if (namespace === "" || name === "") {
@@ -113,7 +119,8 @@ export function TerminalDrawer({
 			}}
 			open={target != null}
 		>
-			<DrawerContent>
+			<DrawerContent style={resize.style}>
+				<DrawerResizeHandle {...resize.handleProps} />
 				{/*
 				 * Closing goes straight through the controlled `open` state. With
 				 * dismissible={false} vaul ignores its own close requests
@@ -150,11 +157,11 @@ export function TerminalDrawer({
 						</Select>
 					</div>
 				)}
-				{/* A right drawer spans the full height, so the terminal fills the rest. The host
-				 * stays mounted behind the states below so a session is never torn down just to
-				 * show a message about it. */}
-				<div className="relative min-h-0 flex-1 overflow-hidden border-t">
-					<div className="h-full w-full" ref={setHost} />
+				{/* A right drawer spans the full height, so the terminal fills the rest, and the resize
+				 * handle only ever changes its width. The host stays mounted behind the states below so a
+				 * session is never torn down just to show a message about it. */}
+				<div className="relative max-h-full min-h-0 flex-1 overflow-hidden border-t">
+					<div className="h-full w-full" data-slot="terminal-host" ref={setHost} />
 					{session.status === "connecting" && !failed && (
 						<p className="absolute inset-0 flex items-center justify-center gap-2 bg-background text-muted-foreground">
 							<LoaderCircle className="size-4 animate-spin" />
@@ -163,7 +170,7 @@ export function TerminalDrawer({
 					)}
 					{failed && (
 						<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background p-6">
-							<p className="max-w-lg text-center break-words text-red-400">
+							<p className="max-w-lg text-center break-words text-red-700">
 								{containersError !== "" ? containersError : session.error}
 							</p>
 							<Button onClick={retry} size="sm" variant="outline">

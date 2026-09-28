@@ -20,6 +20,12 @@ import (
 // so a terminal works on more pods without asking the user to type a command.
 var defaultTerminalCommand = []string{"/bin/sh"}
 
+// terminalEnv is the environment a session is given. The exec API carries a command but no
+// environment, so running the command through env(1) is the only way to set TERM. Without it a
+// shell advertises a dumb terminal and every colour is dropped: prompt definitions, ls, git,
+// less. That is what makes a working terminal look plain white.
+var terminalEnv = []string{"TERM=xterm-256color"}
+
 // TerminalRequest names one interactive session. Cols and Rows are the terminal's dimensions
 // before it starts: the API server allocates the PTY up front, so the first size cannot wait for
 // a resize message the way later ones do.
@@ -160,13 +166,20 @@ func terminalExecutor(restConfig *rest.Config, clientset kubernetes.Interface, r
 	})
 }
 
-// command is what the session runs, with the shell filled in when the caller sent none.
+// command is what the session runs: the caller's command or the default shell, wrapped so the
+// terminal has a TERM to advertise to whatever runs in it.
 func (r TerminalRequest) command() []string {
-	if len(r.Command) == 0 {
-		return defaultTerminalCommand
+	command := r.Command
+	if len(command) == 0 {
+		command = defaultTerminalCommand
 	}
 
-	return r.Command
+	wrapped := make([]string, 0, 1+len(terminalEnv)+len(command))
+	wrapped = append(wrapped, "env")
+	wrapped = append(wrapped, terminalEnv...)
+	wrapped = append(wrapped, command...)
+
+	return wrapped
 }
 
 // sizeQueue feeds the API server the terminal's dimensions. The size the drawer already knows

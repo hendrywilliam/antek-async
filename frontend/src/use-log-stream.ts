@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { OpenPodLogs } from "../wailsjs/go/main/App";
 import { kube } from "../wailsjs/go/models";
-import { createTerminal } from "@/terminal-theme";
+import { attachSelectionCopy, createTerminal } from "@/terminal-theme";
 import { parseControl, type TerminalStatus } from "@/use-terminal";
 
 // How much history the viewer asks for before it starts following. A pod's log can be long and the
@@ -56,6 +56,7 @@ export function useLogStream(
 
 		const { term, fit } = createTerminal("logs");
 		term.open(host);
+		const detachCopy = attachSelectionCopy(term, host);
 
 		setStatus("connecting");
 		setError("");
@@ -151,6 +152,7 @@ export function useLogStream(
 		return () => {
 			cancelled = true;
 			observer.disconnect();
+			detachCopy();
 			// Closing the socket is what ends the stream on the other side.
 			socket?.close();
 			term.dispose();

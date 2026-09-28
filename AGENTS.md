@@ -156,7 +156,8 @@ frontend/src/pages            one page per menu: pods, deployments, statefulsets
 frontend/src/style.css        Tailwind v4 entry, light-only blue-grey tokens, Inter at 14px
 frontend/src/use-terminal.ts  the pod terminal's xterm instance and WebSocket
 frontend/src/use-log-stream.ts the pod log viewer's read-only xterm instance and WebSocket
-frontend/src/terminal-theme.ts the xterm theme, font and factory the two session hooks share
+frontend/src/terminal-theme.ts the xterm theme, font, factory and right-click copy
+                              gesture the two session hooks share
 frontend/src/use-drawer-resize.ts the drag-to-resize width both pod session drawers share
 frontend/src/components/
   resource-table.tsx          generic table with filter/Group By on the client
@@ -548,6 +549,17 @@ generator cannot name a generic instantiation. The generic `resourceHolder[T]` a
   viewer build their emulator from, so the two cannot drift. Unlike the rest of the app it is
   deliberately colourful: the ANSI ramp is Tailwind's 400/300 shades, because a shell's colours and
   a log's severity levels carry meaning that greys would throw away.
+- **A right click is how a session copies its selection, and it is wired by hand.**
+  `attachSelectionCopy` in `terminal-theme.ts` is the one implementation, called by both hooks
+  after `term.open`, because a Wails webview shows no context menu: xterm only moves the
+  selection into its hidden textarea and leaves the copy to the browser's menu, so nothing would
+  happen at all. The copy happens on the right **press**, in the capture phase, for two reasons:
+  a webview on Linux does not deliver the menu event at all (xterm hooks the press for the same
+  reason), and reading it first is what keeps the selection readable before xterm moves its
+  hidden textarea. The menu handler still runs where a menu does arrive, but only to suppress it
+  with `preventDefault`; a right click with nothing selected is left alone entirely. The
+  clipboard call falls back to the deprecated `execCommand` path, because a `wails://` page is
+  not always a secure context and the async clipboard API would reject there.
 - **The log viewer sets `convertEol`, because a followed log has no PTY behind it.** A log line ends
   in a bare LF, and xterm would only move the caret down a line and leave it in the same column,
   which paints the log as a staircase; the LF-to-CRLF translation a PTY's termios normally does is

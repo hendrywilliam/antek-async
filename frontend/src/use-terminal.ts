@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { OpenTerminal } from "../wailsjs/go/main/App";
 import { kube } from "../wailsjs/go/models";
-import { createTerminal } from "@/terminal-theme";
+import { attachSelectionCopy, createTerminal } from "@/terminal-theme";
 
 // A terminal that has not been measured yet still has to name a size, because the API server
 // allocates the PTY before the socket can report a resize.
@@ -70,6 +70,7 @@ export function useTerminal(
 
 		const { term, fit } = createTerminal("terminal");
 		term.open(host);
+		const detachCopy = attachSelectionCopy(term, host);
 
 		setStatus("connecting");
 		setError("");
@@ -183,6 +184,7 @@ export function useTerminal(
 		return () => {
 			cancelled = true;
 			observer.disconnect();
+			detachCopy();
 			// Closing the socket is what ends the session on the other side, so it happens before
 			// the terminal is thrown away.
 			socket?.close();
